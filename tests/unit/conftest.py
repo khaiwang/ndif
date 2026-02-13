@@ -5,9 +5,25 @@ This file provides unit-test-specific factory fixtures.
 """
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, Mock
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
+
+
+# ---------------------------------------------------------------------------
+# Dispatcher patch targets
+# ---------------------------------------------------------------------------
+
+_DISPATCHER_MODULE = "src.services.api.src.queue.dispatcher"
+
+DISPATCHER_PATCH_RAY = f"{_DISPATCHER_MODULE}.RayProvider"
+DISPATCHER_PATCH_REDIS = f"{_DISPATCHER_MODULE}.RedisProvider"
+DISPATCHER_PATCH_OBJ = f"{_DISPATCHER_MODULE}.ObjectStoreProvider"
+DISPATCHER_PATCH_LOGGER = f"{_DISPATCHER_MODULE}.set_logger"
+DISPATCHER_PATCH_PATCH = f"{_DISPATCHER_MODULE}.patch"
+DISPATCHER_PATCH_PROCESSOR = f"{_DISPATCHER_MODULE}.Processor"
+DISPATCHER_PATCH_CONTROLLER = f"{_DISPATCHER_MODULE}.controller_handle"
+DISPATCHER_PATCH_SUBMIT = f"{_DISPATCHER_MODULE}.submit"
 
 
 # ---------------------------------------------------------------------------
@@ -163,3 +179,80 @@ def make_processor(make_request):
         return processor
 
     return _make
+
+
+# ---------------------------------------------------------------------------
+# Dispatcher fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def make_event():
+    """Factory for building Redis-stream event_data dicts with bytes keys/values."""
+
+    def _make(**overrides) -> dict:
+        defaults = {
+            "event_type": "",
+            "model_key": "meta-llama/Llama-2-7b",
+            "replicas": "",
+            "response_key": "response:123",
+            "request_id": "req-001",
+            "replica_id": "",
+        }
+        defaults.update(overrides)
+        return {k.encode(): v.encode() for k, v in defaults.items()}
+
+    return _make
+
+
+@pytest.fixture
+def dispatcher_deps():
+    """Patch all external dependencies and yield a dict of mocks.
+
+    The returned dict contains:
+        ray, redis, obj, logger, patch_fn
+    and the ready-to-use ``dispatcher`` instance.
+    """
+    with (
+        patch(DISPATCHER_PATCH_RAY) as mock_ray,
+        patch(DISPATCHER_PATCH_REDIS) as mock_redis,
+        patch(DISPATCHER_PATCH_OBJ) as mock_obj,
+        patch(DISPATCHER_PATCH_LOGGER) as mock_log,
+        patch(DISPATCHER_PATCH_PATCH) as mock_patch_fn,
+    ):
+        # Make connected() return True on first call so the while-loop
+        # in connect() exits immediately.
+        mock_ray.connected.return_value = True
+        mock_log.return_value = MagicMock()
+
+        # Provide async_client and sync_client stubs.
+        mock_redis.sync_client = MagicMock()
+        mock_redis.async_client = AsyncMock()
+
+        from src.services.api.src.queue.dispatcher import Dispatcher
+
+        dispatcher = Dispatcher()
+
+        yield {
+            "dispatcher": dispatcher,
+            "ray": mock_ray,
+            "redis": mock_redis,
+            "obj": mock_obj,
+            "logger": mock_log,
+            "patch_fn": mock_patch_fn,
+        }
+
+
+@pytest.fixture
+def dispatcher(dispatcher_deps):
+    """Shorthand: return just the dispatcher instance."""
+    return dispatcher_deps["dispatcher"]
+
+
+@pytest.fixture
+def mock_ray(dispatcher_deps):
+    return dispatcher_deps["ray"]
+
+
+@pytest.fixture
+def mock_redis(dispatcher_deps):
+    return dispatcher_deps["redis"]

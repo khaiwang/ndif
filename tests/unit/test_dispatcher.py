@@ -2,6 +2,11 @@
 
 Tests cover construction, dispatch, removal, purging, eviction handling,
 error handling, state aggregation, and all Redis-stream event handlers.
+
+Dispatcher async worker loop tests are in test_dispatcher_workers.py.
+
+Fixtures (dispatcher_deps, dispatcher, mock_ray, mock_redis, make_event)
+are defined in conftest.py.
 """
 
 import asyncio
@@ -11,23 +16,26 @@ from unittest.mock import AsyncMock, MagicMock, patch, call
 import pytest
 
 from src.services.api.src.queue.processor import ProcessorStatus
+from tests.unit.conftest import (
+    DISPATCHER_PATCH_RAY,
+    DISPATCHER_PATCH_REDIS,
+    DISPATCHER_PATCH_OBJ,
+    DISPATCHER_PATCH_LOGGER,
+    DISPATCHER_PATCH_PATCH,
+    DISPATCHER_PATCH_PROCESSOR,
+    DISPATCHER_PATCH_CONTROLLER,
+    DISPATCHER_PATCH_SUBMIT,
+)
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-# Shared patch targets for the Dispatcher constructor dependencies.
-_DISPATCHER_MODULE = "src.services.api.src.queue.dispatcher"
-
-PATCH_RAY = f"{_DISPATCHER_MODULE}.RayProvider"
-PATCH_REDIS = f"{_DISPATCHER_MODULE}.RedisProvider"
-PATCH_OBJ = f"{_DISPATCHER_MODULE}.ObjectStoreProvider"
-PATCH_LOGGER = f"{_DISPATCHER_MODULE}.set_logger"
-PATCH_PATCH = f"{_DISPATCHER_MODULE}.patch"
-PATCH_PROCESSOR = f"{_DISPATCHER_MODULE}.Processor"
-PATCH_CONTROLLER = f"{_DISPATCHER_MODULE}.controller_handle"
-PATCH_SUBMIT = f"{_DISPATCHER_MODULE}.submit"
+# Local aliases for brevity.
+PATCH_RAY = DISPATCHER_PATCH_RAY
+PATCH_REDIS = DISPATCHER_PATCH_REDIS
+PATCH_OBJ = DISPATCHER_PATCH_OBJ
+PATCH_LOGGER = DISPATCHER_PATCH_LOGGER
+PATCH_PATCH = DISPATCHER_PATCH_PATCH
+PATCH_PROCESSOR = DISPATCHER_PATCH_PROCESSOR
+PATCH_CONTROLLER = DISPATCHER_PATCH_CONTROLLER
+PATCH_SUBMIT = DISPATCHER_PATCH_SUBMIT
 
 
 def _make_event(**overrides) -> dict:
@@ -42,64 +50,6 @@ def _make_event(**overrides) -> dict:
     }
     defaults.update(overrides)
     return {k.encode(): v.encode() for k, v in defaults.items()}
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-@pytest.fixture
-def dispatcher_deps():
-    """Patch all external dependencies and yield a dict of mocks.
-
-    The returned dict contains:
-        ray, redis, obj, logger, patch_fn
-    and the ready-to-use ``dispatcher`` instance.
-    """
-    with (
-        patch(PATCH_RAY) as mock_ray,
-        patch(PATCH_REDIS) as mock_redis,
-        patch(PATCH_OBJ) as mock_obj,
-        patch(PATCH_LOGGER) as mock_log,
-        patch(PATCH_PATCH) as mock_patch_fn,
-    ):
-        # Make connected() return True on first call so the while-loop
-        # in connect() exits immediately.
-        mock_ray.connected.return_value = True
-        mock_log.return_value = MagicMock()
-
-        # Provide async_client and sync_client stubs.
-        mock_redis.sync_client = MagicMock()
-        mock_redis.async_client = AsyncMock()
-
-        from src.services.api.src.queue.dispatcher import Dispatcher
-
-        dispatcher = Dispatcher()
-
-        yield {
-            "dispatcher": dispatcher,
-            "ray": mock_ray,
-            "redis": mock_redis,
-            "obj": mock_obj,
-            "logger": mock_log,
-            "patch_fn": mock_patch_fn,
-        }
-
-
-@pytest.fixture
-def dispatcher(dispatcher_deps):
-    """Shorthand: return just the dispatcher instance."""
-    return dispatcher_deps["dispatcher"]
-
-
-@pytest.fixture
-def mock_ray(dispatcher_deps):
-    return dispatcher_deps["ray"]
-
-
-@pytest.fixture
-def mock_redis(dispatcher_deps):
-    return dispatcher_deps["redis"]
 
 
 # ---------------------------------------------------------------------------
