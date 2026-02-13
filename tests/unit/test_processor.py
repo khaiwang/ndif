@@ -1,7 +1,8 @@
-"""Unit tests for the Processor class.
+"""Unit tests for the Processor class — state, queuing, and provisioning.
 
 Tests cover enqueue logic, provisioning, replica management,
 request killing, state reporting, and purge behaviour.
+Async worker loop tests live in test_processor_workers.py.
 All Ray and external dependencies are mocked.
 """
 
@@ -24,12 +25,6 @@ from src.common.schema import BackendResponseModel
 
 UTIL_PREFIX = "src.services.api.src.queue.processor"
 
-
-def _mock_response():
-    """Return a mock response object whose respond() returns None."""
-    resp = MagicMock()
-    resp.respond.return_value = None
-    return resp
 
 
 # ======================================================================
