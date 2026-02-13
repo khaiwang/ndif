@@ -165,6 +165,8 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.component)
         elif "/tests/contract/" in test_path:
             item.add_marker(pytest.mark.contract)
+        elif "/tests/gpu/" in test_path:
+            item.add_marker(pytest.mark.gpu)
         else:
             item.add_marker(pytest.mark.integration)
 

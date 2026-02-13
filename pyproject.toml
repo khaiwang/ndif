@@ -61,6 +61,7 @@ markers = [
     "component: Component tests (with fakes/mocks for external services)",
     "integration: Integration tests (requires running NDIF stack)",
     "contract: Contract tests (verify inter-service message formats)",
+    "gpu: GPU tests (requires CUDA GPU, auto-skips if unavailable)",
 ]
 
 [dependency-groups]
