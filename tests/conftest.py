@@ -189,6 +189,9 @@ def pytest_collection_modifyitems(config, items):
         "TestAdhocModules",
         "TestEdgeCases",
         "TestPrintAndDebug",
+        # Integration tests (Docker Compose + Ray)
+        "TestControllerInfrastructure",
+        "TestDeployEvict",
     }
 
     for item in items:
