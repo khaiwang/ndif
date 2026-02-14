@@ -49,6 +49,8 @@ services:
       - NDIF_CONTROLLER_IMPORT_PATH=${NDIF_CONTROLLER_IMPORT_PATH}
       - SCHEDULING_GOOGLE_CALENDAR_ID=a7cbc58fdb0ddd93a260cd35f34492e8a38c360c44b72c8539e43aa99aeca436@group.calendar.google.com
       - SCHEDULING_GOOGLE_CREDS_PATH=/src/ray/deployments/controller/gcal/creds.json
+      - HF_HUB_ENABLE_HF_TRANSFER=1
+      - HF_HUB_DOWNLOAD_TIMEOUT=3600
 
 
   api:
