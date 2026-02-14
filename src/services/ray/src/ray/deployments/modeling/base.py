@@ -54,9 +54,12 @@ class BaseModelDeployment:
         **kwargs,
     ) -> None:
         super().__init__()
+        init_start = time.time()
 
+        provider_start = time.time()
         ObjectStoreProvider.connect()
         SioProvider.connect()
+        provider_time = time.time() - provider_start
 
         self.model_key = model_key
         self.execution_timeout = execution_timeout
@@ -79,11 +82,14 @@ class BaseModelDeployment:
         # Set the default CUDA device to the first target GPU BEFORE any CUDA
         # call. This ensures the CUDA context (~400MiB) is created on the
         # target GPU rather than always landing on GPU 0.
+        cuda_init_start = time.time()
         if self.target_gpus:
             torch.cuda.set_device(self.target_gpus[0])
+        cuda_init_time = time.time() - cuda_init_start
 
         self.model = self.load_from_disk()
 
+        security_start = time.time()
         self.persistent_objects = self.model._remoteable_persistent_objects()
 
         for key, value in self.persistent_objects.items():
@@ -96,6 +102,7 @@ class BaseModelDeployment:
             self.model._module.requires_grad_(False)
 
         torch.cuda.empty_cache()
+        security_time = time.time() - security_start
 
         self.request: BackendRequestModel
 
@@ -105,6 +112,17 @@ class BaseModelDeployment:
         self.execution_ident = None
 
         StreamTracer.register(self.stream_send, self.stream_receive)
+
+        init_time = time.time() - init_start
+        ModelLoadTimeMetric.update(provider_time, self.model_key, "init_provider_connect")
+        ModelLoadTimeMetric.update(cuda_init_time, self.model_key, "init_cuda_context")
+        ModelLoadTimeMetric.update(security_time, self.model_key, "init_security_setup")
+        ModelLoadTimeMetric.update(init_time, self.model_key, "init_total")
+        self.logger.info(
+            f"ModelActor.__init__ completed in {init_time:.2f}s "
+            f"(provider={provider_time:.2f}s, cuda_init={cuda_init_time:.2f}s, "
+            f"load_from_disk=see 'disk' metric, security={security_time:.2f}s)"
+        )
 
     def _build_max_memory(self) -> Optional[Dict[int, int]]:
         """Build a max_memory dict that restricts model placement to target GPUs.
@@ -185,17 +203,37 @@ class BaseModelDeployment:
 
     async def to_cache(self):
         self.logger.info(f"Saving model to cache for model key {self.model_key}...")
-        # torch.cuda.synchronize()
+        cache_start = time.time()
+
+        cancel_start = time.time()
         await self.cancel()
+        cancel_time = time.time() - cancel_start
 
+        hook_start = time.time()
         remove_accelerate_hooks(self.model._module)
+        hook_time = time.time() - hook_start
 
+        transfer_start = time.time()
         self.model._module = self.model._module.cpu()
-        # torch.cuda.synchronize()
+        torch.cuda.synchronize()
+        transfer_time = time.time() - transfer_start
+
+        cleanup_start = time.time()
         gc.collect()
         torch.cuda.empty_cache()
+        cleanup_time = time.time() - cleanup_start
 
         self.cached = True
+
+        cache_time = time.time() - cache_start
+        ModelLoadTimeMetric.update(transfer_time, self.model_key, "to_cache_gpu_to_cpu")
+        ModelLoadTimeMetric.update(cleanup_time, self.model_key, "to_cache_cleanup")
+        ModelLoadTimeMetric.update(cache_time, self.model_key, "to_cache_total")
+        self.logger.info(
+            f"Model cached in {cache_time:.2f}s "
+            f"(cancel={cancel_time:.2f}s, hooks={hook_time:.2f}s, "
+            f"gpu_to_cpu={transfer_time:.2f}s, cleanup={cleanup_time:.2f}s)"
+        )
 
     def from_cache(self, target_gpus: List[int]):
         """Restore model from CPU cache onto the specified GPU(s).
@@ -223,25 +261,38 @@ class BaseModelDeployment:
 
         max_memory = self._build_max_memory()
 
+        device_map_start = time.time()
         device_map = _get_device_map(self.model._module, "auto", max_memory, None)
+        device_map_time = time.time() - device_map_start
 
+        hook_start = time.time()
         remove_accelerate_hooks(self.model._module)
+        hook_time = time.time() - hook_start
 
+        dispatch_start = time.time()
         self.model._module = dispatch_model(self.model._module, device_map)
-
         torch.cuda.synchronize()
+        dispatch_time = time.time() - dispatch_start
+
+        cleanup_start = time.time()
         gc.collect()
         torch.cuda.empty_cache()
+        cleanup_time = time.time() - cleanup_start
 
         load_time = time.time() - start
 
         self._verify_device_placement(self.model._module, "cache")
 
-        self.logger.info(
-            f"Model loaded from cache in {load_time} seconds"
-        )
-
+        ModelLoadTimeMetric.update(device_map_time, self.model_key, "from_cache_device_map")
+        ModelLoadTimeMetric.update(dispatch_time, self.model_key, "from_cache_cpu_to_gpu")
+        ModelLoadTimeMetric.update(cleanup_time, self.model_key, "from_cache_cleanup")
         ModelLoadTimeMetric.update(load_time, self.model_key, "cache")
+
+        self.logger.info(
+            f"Model loaded from cache in {load_time:.2f}s "
+            f"(device_map={device_map_time:.2f}s, hooks={hook_time:.2f}s, "
+            f"cpu_to_gpu={dispatch_time:.2f}s, cleanup={cleanup_time:.2f}s)"
+        )
 
         self.cached = False
 

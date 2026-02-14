@@ -469,12 +469,16 @@ class Processor:
             When in BUSY status after an error, the method waits for the
             Dispatcher to clear the error before processing new requests.
         """
+        worker_start = time.time()
         self.status = ProcessorStatus.PROVISIONING
 
         asyncio.create_task(self.reply_worker())
 
         if provision:
+            provision_start = time.time()
             await self.provision()
+            provision_time = time.time() - provision_start
+            logger.info(f"[{self.model_key}] Provisioning completed in {provision_time:.2f}s")
         else:
             self.status = ProcessorStatus.READY
 
@@ -483,10 +487,16 @@ class Processor:
 
         self.status = ProcessorStatus.DEPLOYING
 
+        deploy_start = time.time()
         await self.initialize()
+        deploy_time = time.time() - deploy_start
+        logger.info(f"[{self.model_key}] Initialization (deploy wait) completed in {deploy_time:.2f}s")
 
         if self.status == ProcessorStatus.CANCELLED:
             return
+
+        total_time = time.time() - worker_start
+        logger.info(f"[{self.model_key}] Total time from request to READY: {total_time:.2f}s")
 
         self.status = ProcessorStatus.READY
 

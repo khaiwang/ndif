@@ -1,6 +1,7 @@
 import asyncio
 import os
 import sys
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from importlib.metadata import distributions, packages_distributions
@@ -11,6 +12,7 @@ from pydantic import BaseModel
 from ray.util.state import list_actors
 
 from ....logging.logger import set_logger
+from ....metrics import ModelLoadTimeMetric
 from ....providers.mailgun import MailgunProvider
 from ....providers.objectstore import ObjectStoreProvider
 from ....providers.socketio import SioProvider
@@ -160,15 +162,21 @@ class _ControllerActor:
         )
 
     def apply(self):
+        apply_start = time.time()
         self.logger.info(f"Applying state: {self.state}")
 
         deployment_delta = self.build()
 
         # Delete deployments
+        delete_start = time.time()
         for deployment in deployment_delta.deployments_to_delete:
             deployment.delete()
+        delete_time = time.time() - delete_start
+        if deployment_delta.deployments_to_delete:
+            self.logger.info(f"Deleted {len(deployment_delta.deployments_to_delete)} deployments in {delete_time:.2f}s")
 
         # Cache deployments - must complete before from_cache can proceed to free up resources
+        cache_start = time.time()
         cache_futures = []
         cache_deployments = []
         for deployment in deployment_delta.deployments_to_cache:
@@ -190,10 +198,13 @@ class _ControllerActor:
 
         # Wait for all cache operations to complete before proceeding
         for future, deployment in zip(cache_futures, cache_deployments):
+            evict_start = time.time()
             try:
                 ray.get(future)
+                evict_time = time.time() - evict_start
+                ModelLoadTimeMetric.update(evict_time, deployment.model_key, "eviction_to_cache")
                 self.logger.info(
-                    f"Deployment {deployment.model_key} completed cache successfully"
+                    f"Deployment {deployment.model_key} completed cache in {evict_time:.2f}s"
                 )
             except Exception as e:
                 self.logger.error(
@@ -205,7 +216,12 @@ class _ControllerActor:
                     pass
                 self._remove_deployment_from_state(deployment)
 
+        cache_total_time = time.time() - cache_start
+        if cache_deployments:
+            self.logger.info(f"All evictions completed in {cache_total_time:.2f}s (blocked)")
+
         # Deploy models from cache - spawn monitoring tasks
+        from_cache_start = time.time()
         for deployment in deployment_delta.deployments_from_cache:
             future = deployment.from_cache()
             if future is not None:
@@ -219,8 +235,12 @@ class _ControllerActor:
                 )
                 deployment.delete()
                 self._remove_deployment_from_state(deployment)
+        from_cache_dispatch_time = time.time() - from_cache_start
+        if deployment_delta.deployments_from_cache:
+            self.logger.info(f"Dispatched {len(deployment_delta.deployments_from_cache)} from_cache tasks in {from_cache_dispatch_time:.2f}s")
 
         # Create models from disk - spawn monitoring tasks
+        create_start = time.time()
         for name, deployment in deployment_delta.deployments_to_create:
             deployment_args = BaseModelDeploymentArgs(
                 model_key=deployment.model_key,
@@ -244,6 +264,12 @@ class _ControllerActor:
                 )
                 deployment.delete()
                 self._remove_deployment_from_state(deployment)
+        create_dispatch_time = time.time() - create_start
+        if deployment_delta.deployments_to_create:
+            self.logger.info(f"Dispatched {len(deployment_delta.deployments_to_create)} actor creation tasks in {create_dispatch_time:.2f}s")
+
+        apply_time = time.time() - apply_start
+        self.logger.info(f"apply() completed in {apply_time:.2f}s (eviction_blocking={cache_total_time:.2f}s)")
 
     async def _monitor_deployment(
         self,
@@ -260,13 +286,16 @@ class _ControllerActor:
             deployment: The Deployment object being monitored.
             operation: Name of the operation for logging.
         """
+        monitor_start = time.time()
         try:
             # Use asyncio to wait for the ray future without blocking
             await asyncio.get_event_loop().run_in_executor(
                 None, lambda: ray.get(future)
             )
+            monitor_time = time.time() - monitor_start
+            ModelLoadTimeMetric.update(monitor_time, deployment.model_key, f"monitor_{operation}")
             self.logger.info(
-                f"Deployment {deployment.model_key} completed {operation} successfully"
+                f"Deployment {deployment.model_key} completed {operation} in {monitor_time:.2f}s"
             )
         except Exception as e:
             self.logger.error(
