@@ -16,6 +16,7 @@ class TestAuthenticateApiKey:
 
     @pytest.mark.asyncio
     async def test_dev_mode_bypasses_validation(self):
+        """Verify dev mode skips API key validation and returns the key as-is."""
         from src.services.api.src.dependencies import authenticate_api_key
         from src.services.api.src.config import AppConfig
 
@@ -25,6 +26,7 @@ class TestAuthenticateApiKey:
 
     @pytest.mark.asyncio
     async def test_dev_mode_empty_key(self):
+        """Verify dev mode accepts an empty string API key."""
         from src.services.api.src.dependencies import authenticate_api_key
         from src.services.api.src.config import AppConfig
 
@@ -34,6 +36,7 @@ class TestAuthenticateApiKey:
 
     @pytest.mark.asyncio
     async def test_no_key_store_raises_401(self):
+        """Verify 401 is raised when api_key_store is None (not configured)."""
         from src.services.api.src.config import AppConfig
 
         AppConfig.dev_mode = False
@@ -46,6 +49,7 @@ class TestAuthenticateApiKey:
 
     @pytest.mark.asyncio
     async def test_invalid_key_raises_401(self):
+        """Verify 401 is raised when the API key does not exist in the store."""
         from src.services.api.src.config import AppConfig
 
         AppConfig.dev_mode = False
@@ -60,6 +64,7 @@ class TestAuthenticateApiKey:
 
     @pytest.mark.asyncio
     async def test_valid_key_returns_key(self):
+        """Verify a valid API key passes validation and is returned."""
         from src.services.api.src.config import AppConfig
 
         AppConfig.dev_mode = False
@@ -77,6 +82,7 @@ class TestValidatePythonVersion:
 
     @pytest.mark.asyncio
     async def test_dev_mode_bypasses(self):
+        """Verify dev mode skips Python version validation."""
         from src.services.api.src.dependencies import validate_python_version
         from src.services.api.src.config import AppConfig
 
@@ -86,6 +92,7 @@ class TestValidatePythonVersion:
 
     @pytest.mark.asyncio
     async def test_compatible_version(self):
+        """Verify a Python version above the minimum passes validation."""
         from src.services.api.src.dependencies import validate_python_version
         from src.services.api.src.config import AppConfig
 
@@ -96,6 +103,7 @@ class TestValidatePythonVersion:
 
     @pytest.mark.asyncio
     async def test_exact_minimum_version(self):
+        """Verify the exact minimum Python version passes validation."""
         from src.services.api.src.dependencies import validate_python_version
         from src.services.api.src.config import AppConfig
 
@@ -106,6 +114,7 @@ class TestValidatePythonVersion:
 
     @pytest.mark.asyncio
     async def test_incompatible_version_raises_400(self):
+        """Verify 400 is raised for a Python version below the minimum."""
         from src.services.api.src.dependencies import validate_python_version
         from src.services.api.src.config import AppConfig
 
@@ -117,6 +126,7 @@ class TestValidatePythonVersion:
 
     @pytest.mark.asyncio
     async def test_empty_version_raises_400(self):
+        """Verify 400 is raised for an empty Python version string."""
         from src.services.api.src.dependencies import validate_python_version
         from src.services.api.src.config import AppConfig
 
@@ -131,6 +141,7 @@ class TestValidateNnsightVersion:
 
     @pytest.mark.asyncio
     async def test_dev_mode_bypasses(self):
+        """Verify dev mode skips nnsight version validation."""
         from src.services.api.src.dependencies import validate_nnsight_version
         from src.services.api.src.config import AppConfig
 
@@ -140,6 +151,7 @@ class TestValidateNnsightVersion:
 
     @pytest.mark.asyncio
     async def test_compatible_version(self):
+        """Verify a nnsight version above the minimum passes validation."""
         from src.services.api.src.dependencies import validate_nnsight_version
         from src.services.api.src.config import AppConfig
 
@@ -150,6 +162,7 @@ class TestValidateNnsightVersion:
 
     @pytest.mark.asyncio
     async def test_incompatible_version_raises_400(self):
+        """Verify 400 is raised for a nnsight version below the minimum."""
         from src.services.api.src.dependencies import validate_nnsight_version
         from src.services.api.src.config import AppConfig
 
@@ -161,6 +174,7 @@ class TestValidateNnsightVersion:
 
     @pytest.mark.asyncio
     async def test_empty_version_raises_400(self):
+        """Verify 400 is raised for an empty nnsight version string."""
         from src.services.api.src.dependencies import validate_nnsight_version
         from src.services.api.src.config import AppConfig
 
@@ -175,6 +189,7 @@ class TestCheckHotswappingAccess:
 
     @pytest.mark.asyncio
     async def test_dev_mode_returns_true(self):
+        """Verify dev mode grants hotswapping access unconditionally."""
         from src.services.api.src.dependencies import check_hotswapping_access
         from src.services.api.src.config import AppConfig
 
@@ -184,6 +199,7 @@ class TestCheckHotswappingAccess:
 
     @pytest.mark.asyncio
     async def test_no_key_store_returns_false(self):
+        """Verify hotswapping access returns False when no key store exists."""
         from src.services.api.src.config import AppConfig
 
         AppConfig.dev_mode = False
@@ -195,6 +211,7 @@ class TestCheckHotswappingAccess:
 
     @pytest.mark.asyncio
     async def test_key_with_access(self):
+        """Verify hotswapping access returns True for a key with access."""
         from src.services.api.src.config import AppConfig
 
         AppConfig.dev_mode = False
@@ -208,6 +225,7 @@ class TestCheckHotswappingAccess:
 
     @pytest.mark.asyncio
     async def test_key_without_access(self):
+        """Verify hotswapping access returns False for a key without access."""
         from src.services.api.src.config import AppConfig
 
         AppConfig.dev_mode = False
@@ -225,6 +243,7 @@ class TestRequireRayConnection:
 
     @pytest.mark.asyncio
     async def test_connected_passes(self):
+        """Verify require_ray_connection passes when Redis reports connected."""
         from src.services.api.src.dependencies import require_ray_connection
 
         mock_client = AsyncMock()
@@ -235,6 +254,7 @@ class TestRequireRayConnection:
 
     @pytest.mark.asyncio
     async def test_disconnected_raises_503(self):
+        """Verify 503 is raised when Redis reports Ray is disconnected."""
         from src.services.api.src.dependencies import require_ray_connection
 
         mock_client = AsyncMock()

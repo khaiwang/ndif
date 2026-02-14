@@ -42,6 +42,7 @@ class TestPingEndpoint:
 
     @pytest.mark.asyncio
     async def test_ping_returns_pong(self, client):
+        """Verify that GET /ping returns 200 with 'pong'."""
         response = await client.get("/ping")
         assert response.status_code == 200
         assert response.json() == "pong"
@@ -52,6 +53,7 @@ class TestConnectedEndpoint:
 
     @pytest.mark.asyncio
     async def test_connected_when_ray_up(self, client):
+        """Verify that GET /connected returns 200 when Redis reports Ray is connected."""
         mock_client = AsyncMock()
         mock_client.get.return_value = b"1"
         with patch("src.services.api.src.dependencies.RedisProvider") as mock_redis:
@@ -61,6 +63,7 @@ class TestConnectedEndpoint:
 
     @pytest.mark.asyncio
     async def test_disconnected_when_ray_down(self, client):
+        """Verify that GET /connected returns 503 when Redis reports Ray is disconnected."""
         mock_client = AsyncMock()
         mock_client.get.return_value = None
         with patch("src.services.api.src.dependencies.RedisProvider") as mock_redis:
@@ -74,6 +77,7 @@ class TestResponseEndpoint:
 
     @pytest.mark.asyncio
     async def test_response_not_found(self, client):
+        """Verify that GET /response/{id} raises when the response ID does not exist."""
         with patch("src.services.api.src.app.BackendResponseModel") as mock_resp_cls:
             mock_resp_cls.load.side_effect = Exception("Not found")
             # ASGITransport propagates unhandled exceptions as Python exceptions
@@ -82,6 +86,7 @@ class TestResponseEndpoint:
 
     @pytest.mark.asyncio
     async def test_response_found(self, client):
+        """Verify that GET /response/{id} loads and returns a valid response."""
         from src.common.schema.response import BackendResponseModel
 
         mock_resp = MagicMock(spec=BackendResponseModel)

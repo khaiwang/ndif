@@ -97,6 +97,7 @@ class TestDispatchWorker:
 
     @pytest.mark.asyncio
     async def test_calls_handle_evictions_every_iteration(self, dispatcher):
+        """Verify handle_evictions is called on every dispatch_worker loop iteration."""
         with (
             patch.object(dispatcher, "get", new_callable=AsyncMock) as mock_get,
             patch.object(dispatcher, "dispatch"),
@@ -114,6 +115,7 @@ class TestDispatchWorker:
 
     @pytest.mark.asyncio
     async def test_calls_handle_errors_every_iteration(self, dispatcher):
+        """Verify handle_errors is called on every dispatch_worker loop iteration."""
         with (
             patch.object(dispatcher, "get", new_callable=AsyncMock) as mock_get,
             patch.object(dispatcher, "dispatch"),
@@ -231,6 +233,7 @@ class TestStatusWorker:
 
     @pytest.mark.asyncio
     async def test_queries_controller_after_trigger(self, dispatcher, mock_redis):
+        """Verify status_worker queries the controller after receiving a trigger."""
         mock_redis.async_client.xread = AsyncMock(
             side_effect=[self._xread_response(), asyncio.CancelledError]
         )
@@ -247,6 +250,7 @@ class TestStatusWorker:
 
     @pytest.mark.asyncio
     async def test_publishes_status_to_redis(self, dispatcher, mock_redis):
+        """Verify status_worker publishes the controller status to the Redis status:event channel."""
         status_data = {"models": ["llama"]}
         mock_redis.async_client.xread = AsyncMock(
             side_effect=[self._xread_response(), asyncio.CancelledError]
@@ -265,6 +269,7 @@ class TestStatusWorker:
 
     @pytest.mark.asyncio
     async def test_caches_status_with_ttl(self, dispatcher, mock_redis):
+        """Verify status_worker caches the status in Redis with the configured TTL."""
         status_data = {"models": []}
         mock_redis.async_client.xread = AsyncMock(
             side_effect=[self._xread_response(), asyncio.CancelledError]
@@ -283,6 +288,7 @@ class TestStatusWorker:
 
     @pytest.mark.asyncio
     async def test_clears_requested_flag(self, dispatcher, mock_redis):
+        """Verify status_worker deletes the 'status:requested' key after publishing."""
         mock_redis.async_client.xread = AsyncMock(
             side_effect=[self._xread_response(), asyncio.CancelledError]
         )
@@ -438,6 +444,7 @@ class TestEventsWorker:
 
     @pytest.mark.asyncio
     async def test_reads_from_dispatcher_events_stream(self, dispatcher, mock_redis):
+        """Verify events_worker reads from the 'dispatcher:events' stream starting at '$'."""
         mock_redis.async_client.xread = AsyncMock(
             side_effect=[
                 self._xread_response(),
@@ -456,6 +463,7 @@ class TestEventsWorker:
 
     @pytest.mark.asyncio
     async def test_dispatches_queue_state_request(self, dispatcher, mock_redis, make_event):
+        """Verify events_worker routes queue_state_request to _handle_queue_state_request."""
         event = make_event(event_type="queue_state_request")
         mock_redis.async_client.xread = AsyncMock(
             side_effect=[self._xread_response(event_data=event), asyncio.CancelledError]
@@ -469,6 +477,7 @@ class TestEventsWorker:
 
     @pytest.mark.asyncio
     async def test_dispatches_deploy_event(self, dispatcher, mock_redis, make_event):
+        """Verify events_worker routes deploy events to _handle_deploy_event."""
         event = make_event(event_type="deploy", replicas="2")
         mock_redis.async_client.xread = AsyncMock(
             side_effect=[self._xread_response(event_data=event), asyncio.CancelledError]
@@ -482,6 +491,7 @@ class TestEventsWorker:
 
     @pytest.mark.asyncio
     async def test_dispatches_evict_event(self, dispatcher, mock_redis, make_event):
+        """Verify events_worker routes evict events to _handle_evict_event."""
         event = make_event(event_type="evict", model_key="test/model")
         mock_redis.async_client.xread = AsyncMock(
             side_effect=[self._xread_response(event_data=event), asyncio.CancelledError]
@@ -495,6 +505,7 @@ class TestEventsWorker:
 
     @pytest.mark.asyncio
     async def test_dispatches_kill_request(self, dispatcher, mock_redis, make_event):
+        """Verify events_worker routes kill_request events to _handle_kill_request."""
         event = make_event(event_type="kill_request", request_id="req-999")
         mock_redis.async_client.xread = AsyncMock(
             side_effect=[self._xread_response(event_data=event), asyncio.CancelledError]
@@ -508,6 +519,7 @@ class TestEventsWorker:
 
     @pytest.mark.asyncio
     async def test_dispatches_env_event(self, dispatcher, mock_redis, make_event):
+        """Verify events_worker routes env events to _handle_env_event."""
         event = make_event(event_type="env")
         mock_redis.async_client.xread = AsyncMock(
             side_effect=[self._xread_response(event_data=event), asyncio.CancelledError]
@@ -521,6 +533,7 @@ class TestEventsWorker:
 
     @pytest.mark.asyncio
     async def test_logs_warning_for_unknown_event(self, dispatcher, mock_redis):
+        """Verify events_worker logs a warning for unrecognized event types."""
         event = {b"event_type": b"totally_unknown"}
         mock_redis.async_client.xread = AsyncMock(
             side_effect=[self._xread_response(event_data=event), asyncio.CancelledError]

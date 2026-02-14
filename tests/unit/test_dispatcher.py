@@ -60,9 +60,11 @@ class TestDispatcherInit:
     """Tests for Dispatcher.__init__ and connect()."""
 
     def test_init_creates_empty_processors(self, dispatcher):
+        """Verify Dispatcher initializes with an empty processors dict."""
         assert dispatcher.processors == {}
 
     def test_init_creates_queues(self, dispatcher):
+        """Verify Dispatcher initializes error_queue and eviction_queue as asyncio.Queues."""
         assert isinstance(dispatcher.error_queue, asyncio.Queue)
         assert isinstance(dispatcher.eviction_queue, asyncio.Queue)
 
@@ -104,9 +106,11 @@ class TestDispatcherInit:
             assert mock_ray.connect.call_count >= 1
 
     def test_objectstore_connect_called(self, dispatcher_deps):
+        """Verify ObjectStoreProvider.connect() is called during Dispatcher init."""
         dispatcher_deps["obj"].connect.assert_called_once()
 
     def test_patch_called(self, dispatcher_deps):
+        """Verify the monkey-patch function is called during Dispatcher init."""
         dispatcher_deps["patch_fn"].assert_called_once()
 
 
@@ -182,6 +186,7 @@ class TestRemoveAndPurge:
     """Tests for Dispatcher.remove() and Dispatcher.purge()."""
 
     def test_remove_pops_processor_and_sets_cancelled(self, dispatcher):
+        """Verify remove() pops the processor, sets CANCELLED, and calls purge."""
         mock_proc = MagicMock()
         mock_proc.status = ProcessorStatus.READY
         dispatcher.processors["model-A"] = mock_proc
@@ -193,10 +198,12 @@ class TestRemoveAndPurge:
         mock_proc.purge.assert_called_once_with("gone")
 
     def test_remove_raises_on_missing_key(self, dispatcher):
+        """Verify remove() raises KeyError for a non-existent model key."""
         with pytest.raises(KeyError):
             dispatcher.remove("nonexistent", "nope")
 
     def test_purge_removes_all_processors(self, dispatcher):
+        """Verify purge() removes all processors from the dispatcher."""
         for name in ("A", "B", "C"):
             p = MagicMock()
             p.status = ProcessorStatus.READY
@@ -207,6 +214,7 @@ class TestRemoveAndPurge:
         assert dispatcher.processors == {}
 
     def test_purge_on_empty_is_noop(self, dispatcher):
+        """Verify purge() does nothing when no processors exist."""
         dispatcher.purge("nothing")
         assert dispatcher.processors == {}
 
@@ -219,6 +227,7 @@ class TestHandleEvictions:
     """Tests for Dispatcher.handle_evictions()."""
 
     def test_full_removal_when_replica_id_is_none(self, dispatcher):
+        """Verify eviction with replica_id=None removes the entire processor."""
         mock_proc = MagicMock()
         mock_proc.status = ProcessorStatus.READY
         dispatcher.processors["model-A"] = mock_proc
@@ -230,6 +239,7 @@ class TestHandleEvictions:
         assert mock_proc.status == ProcessorStatus.CANCELLED
 
     def test_replica_removal_keeps_processor_if_not_cancelled(self, dispatcher):
+        """Verify replica eviction keeps the processor when status is not CANCELLED."""
         mock_proc = MagicMock()
         mock_proc.status = ProcessorStatus.READY  # stays non-CANCELLED
         dispatcher.processors["model-A"] = mock_proc
@@ -241,6 +251,7 @@ class TestHandleEvictions:
         assert "model-A" in dispatcher.processors
 
     def test_replica_removal_pops_processor_if_cancelled(self, dispatcher):
+        """Verify replica eviction removes the processor when it transitions to CANCELLED."""
         mock_proc = MagicMock()
         mock_proc.status = ProcessorStatus.CANCELLED
         dispatcher.processors["model-A"] = mock_proc
@@ -252,6 +263,7 @@ class TestHandleEvictions:
         assert "model-A" not in dispatcher.processors
 
     def test_handles_multiple_evictions(self, dispatcher):
+        """Verify handle_evictions processes all queued evictions in one call."""
         for name in ("A", "B"):
             p = MagicMock()
             p.status = ProcessorStatus.READY
@@ -277,6 +289,7 @@ class TestHandleEvictions:
         # No error, no crash
 
     def test_empty_eviction_queue_is_noop(self, dispatcher):
+        """Verify handle_evictions does nothing when the eviction queue is empty."""
         dispatcher.handle_evictions()
         assert dispatcher.processors == {}
 
@@ -398,6 +411,7 @@ class TestGetState:
     """Tests for Dispatcher.get_state()."""
 
     def test_get_state_aggregates_processors(self, dispatcher):
+        """Verify get_state returns state from all active processors."""
         for name in ("A", "B"):
             p = MagicMock()
             p.get_state.return_value = {"model_key": name, "status": "ready"}
@@ -411,6 +425,7 @@ class TestGetState:
         assert state["processors"]["B"]["model_key"] == "B"
 
     def test_get_state_empty(self, dispatcher):
+        """Verify get_state returns empty processors dict when none exist."""
         state = dispatcher.get_state()
         assert state == {"processors": {}}
 
@@ -424,6 +439,7 @@ class TestHandleDeployEvent:
 
     @pytest.mark.asyncio
     async def test_updates_replica_count(self, dispatcher):
+        """Verify deploy event updates the processor's requested_replica_count."""
         mock_proc = MagicMock()
         mock_proc.requested_replica_count = 1
         dispatcher.processors["meta-llama/Llama-2-7b"] = mock_proc
@@ -435,6 +451,7 @@ class TestHandleDeployEvent:
 
     @pytest.mark.asyncio
     async def test_clamps_replica_count_to_one(self, dispatcher):
+        """Verify deploy event clamps replica count to a minimum of 1."""
         mock_proc = MagicMock()
         mock_proc.requested_replica_count = 2
         dispatcher.processors["meta-llama/Llama-2-7b"] = mock_proc
@@ -472,6 +489,7 @@ class TestHandleEvictEvent:
 
     @pytest.mark.asyncio
     async def test_full_eviction_removes_processor(self, dispatcher):
+        """Verify evict event with no replica_id removes the entire processor."""
         mock_proc = MagicMock()
         mock_proc.status = ProcessorStatus.READY
         dispatcher.processors["meta-llama/Llama-2-7b"] = mock_proc
@@ -484,6 +502,7 @@ class TestHandleEvictEvent:
 
     @pytest.mark.asyncio
     async def test_replica_eviction(self, dispatcher):
+        """Verify evict event with a replica_id calls remove_replica on the processor."""
         mock_proc = MagicMock()
         mock_proc.status = ProcessorStatus.READY
         dispatcher.processors["meta-llama/Llama-2-7b"] = mock_proc
@@ -497,6 +516,7 @@ class TestHandleEvictEvent:
 
     @pytest.mark.asyncio
     async def test_replica_eviction_pops_cancelled_processor(self, dispatcher):
+        """Verify replica eviction removes the processor if it becomes CANCELLED."""
         mock_proc = MagicMock()
         mock_proc.status = ProcessorStatus.CANCELLED
         dispatcher.processors["meta-llama/Llama-2-7b"] = mock_proc
@@ -508,6 +528,7 @@ class TestHandleEvictEvent:
 
     @pytest.mark.asyncio
     async def test_evict_for_unknown_model_is_noop(self, dispatcher):
+        """Verify evict event for an unknown model does not raise."""
         event = _make_event(event_type="evict", model_key="ghost/model")
         await dispatcher._handle_evict_event(event)
         # No error
@@ -518,6 +539,7 @@ class TestHandleKillRequest:
 
     @pytest.mark.asyncio
     async def test_kill_found_in_processor(self, dispatcher, mock_redis):
+        """Verify kill_request event finds and removes request, pushing result to Redis."""
         mock_proc = MagicMock()
         mock_proc.kill_request = AsyncMock(return_value={
             "status": "removed_from_queue",
@@ -538,6 +560,7 @@ class TestHandleKillRequest:
 
     @pytest.mark.asyncio
     async def test_kill_not_found_in_any_processor(self, dispatcher, mock_redis):
+        """Verify kill_request pushes 'not_found' when no processor has the request."""
         mock_proc = MagicMock()
         mock_proc.kill_request = AsyncMock(return_value={
             "status": "not_found",
@@ -554,6 +577,7 @@ class TestHandleKillRequest:
 
     @pytest.mark.asyncio
     async def test_kill_with_no_processors(self, dispatcher, mock_redis):
+        """Verify kill_request pushes 'not_found' when no processors exist."""
         event = _make_event(event_type="kill_request", request_id="req-001")
         await dispatcher._handle_kill_request(event)
 
@@ -586,6 +610,7 @@ class TestHandleKillRequest:
 
     @pytest.mark.asyncio
     async def test_kill_exception_pushes_error(self, dispatcher, mock_redis):
+        """Verify kill_request pushes an error result when the handler raises an exception."""
         mock_proc = MagicMock()
         mock_proc.kill_request = AsyncMock(side_effect=RuntimeError("bang"))
         dispatcher.processors["model-A"] = mock_proc
@@ -604,6 +629,7 @@ class TestHandleQueueStateRequest:
 
     @pytest.mark.asyncio
     async def test_pushes_state_to_redis(self, dispatcher, mock_redis):
+        """Verify queue_state_request serializes all processor states and pushes to Redis."""
         mock_proc = MagicMock()
         mock_proc.get_state.return_value = {"status": "ready"}
         dispatcher.processors["model-A"] = mock_proc
@@ -620,6 +646,7 @@ class TestHandleQueueStateRequest:
 
     @pytest.mark.asyncio
     async def test_pushes_empty_state(self, dispatcher, mock_redis):
+        """Verify queue_state_request pushes empty processors dict when none exist."""
         event = _make_event(event_type="queue_state_request")
         await dispatcher._handle_queue_state_request(event)
 
@@ -647,6 +674,7 @@ class TestHandleEnvEvent:
 
     @pytest.mark.asyncio
     async def test_returns_cached_env(self, dispatcher, mock_redis):
+        """Verify env event returns cached environment data from Redis without querying controller."""
         cached = pickle.dumps({"python": "3.10"})
         mock_redis.async_client.get = AsyncMock(return_value=cached)
 
@@ -660,6 +688,7 @@ class TestHandleEnvEvent:
 
     @pytest.mark.asyncio
     async def test_fetches_env_from_controller(self, dispatcher, mock_redis):
+        """Verify env event queries controller and caches result when no cache exists."""
         mock_redis.async_client.get = AsyncMock(return_value=None)
 
         env_info = {"python": "3.10", "packages": []}
@@ -684,6 +713,7 @@ class TestHandleEnvEvent:
 
     @pytest.mark.asyncio
     async def test_env_error_pushes_error_result(self, dispatcher, mock_redis):
+        """Verify env event pushes an error result when controller query fails."""
         mock_redis.async_client.get = AsyncMock(return_value=None)
 
         with (

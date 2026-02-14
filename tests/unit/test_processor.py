@@ -36,6 +36,7 @@ class TestProcessorInit:
     """Test Processor constructor defaults."""
 
     def test_default_values(self, make_processor):
+        """Verify Processor default attributes after construction."""
         p = make_processor()
         assert p.model_key == "meta-llama/Llama-2-7b"
         assert p.status == ProcessorStatus.UNINITIALIZED
@@ -46,10 +47,12 @@ class TestProcessorInit:
         assert p.queue.empty()
 
     def test_explicit_replica_count(self, make_processor):
+        """Verify Processor respects an explicit requested_replica_count."""
         p = make_processor(replica_count=4)
         assert p.requested_replica_count == 4
 
     def test_replica_count_minimum_is_one(self, make_processor):
+        """Verify replica count is clamped to a minimum of 1."""
         p = make_processor(replica_count=0)
         assert p.requested_replica_count == 1
 
@@ -66,6 +69,7 @@ class TestProcessorStatus:
     """Test status getter/setter and timestamp update."""
 
     def test_status_setter_records_timestamp(self, make_processor):
+        """Verify setting status updates status_changed_at timestamp."""
         p = make_processor()
         assert p.status_changed_at == 0
         p.status = ProcessorStatus.PROVISIONING
@@ -73,6 +77,7 @@ class TestProcessorStatus:
         assert p.status_changed_at > 0
 
     def test_status_transitions(self, make_processor):
+        """Verify all ProcessorStatus values can be set on a Processor."""
         p = make_processor()
         for s in ProcessorStatus:
             p.status = s
@@ -88,6 +93,7 @@ class TestEnqueue:
     """Test Processor.enqueue() acceptance/rejection logic."""
 
     def test_enqueue_dedicated_model(self, make_processor, make_request):
+        """Verify a non-hotswap request is accepted when model is dedicated."""
         p = make_processor()
         p.dedicated = True
         req = make_request(hotswapping=False)
@@ -97,6 +103,7 @@ class TestEnqueue:
         req.create_response.assert_called()
 
     def test_enqueue_hotswap_on_non_dedicated(self, make_processor, make_request):
+        """Verify a hotswap request is accepted on a non-dedicated model."""
         p = make_processor()
         p.dedicated = False
         req = make_request(hotswapping=True)
@@ -105,6 +112,7 @@ class TestEnqueue:
         assert p.queue.qsize() == 1
 
     def test_enqueue_non_hotswap_on_non_dedicated_rejected(self, make_processor, make_request):
+        """Verify a non-hotswap request is rejected with ERROR on a non-dedicated model."""
         p = make_processor()
         p.dedicated = False
         req = make_request(hotswapping=False)
@@ -127,6 +135,7 @@ class TestEnqueue:
         assert p.queue.qsize() == 1
 
     def test_enqueue_multiple_requests_increments_queue(self, make_processor, make_request):
+        """Verify multiple enqueued requests increase queue size correctly."""
         p = make_processor()
         p.dedicated = True
         for i in range(5):
@@ -134,6 +143,7 @@ class TestEnqueue:
         assert p.queue.qsize() == 5
 
     def test_enqueue_sends_queued_response(self, make_processor, make_request):
+        """Verify enqueue sends a QUEUED response and calls respond()."""
         p = make_processor()
         p.dedicated = True
         req = make_request()
@@ -157,6 +167,7 @@ class TestCheckDedicated:
     @pytest.mark.asyncio
     @patch(f"{UTIL_PREFIX}.submit", new_callable=AsyncMock)
     async def test_returns_true_when_dedicated_deployment_exists(self, mock_submit, make_processor):
+        """Verify check_dedicated returns True when at least one replica has dedicated=True."""
         mock_submit.return_value = {
             "replica-1": {"dedicated": True, "model_key": "m"},
             "replica-2": {"dedicated": False},
@@ -171,6 +182,7 @@ class TestCheckDedicated:
     @pytest.mark.asyncio
     @patch(f"{UTIL_PREFIX}.submit", new_callable=AsyncMock)
     async def test_returns_false_when_no_dedicated(self, mock_submit, make_processor):
+        """Verify check_dedicated returns False when no replica has dedicated=True."""
         mock_submit.return_value = {
             "replica-1": {"dedicated": False},
         }
@@ -181,6 +193,7 @@ class TestCheckDedicated:
     @pytest.mark.asyncio
     @patch(f"{UTIL_PREFIX}.submit", new_callable=AsyncMock)
     async def test_returns_false_when_none(self, mock_submit, make_processor):
+        """Verify check_dedicated returns False when controller returns None."""
         mock_submit.return_value = None
         p = make_processor()
         result = await p.check_dedicated(MagicMock())
@@ -189,6 +202,7 @@ class TestCheckDedicated:
     @pytest.mark.asyncio
     @patch(f"{UTIL_PREFIX}.submit", new_callable=AsyncMock)
     async def test_returns_false_when_not_dict(self, mock_submit, make_processor):
+        """Verify check_dedicated returns False when controller returns a non-dict value."""
         mock_submit.return_value = "some_string"
         p = make_processor()
         result = await p.check_dedicated(MagicMock())
@@ -197,6 +211,7 @@ class TestCheckDedicated:
     @pytest.mark.asyncio
     @patch(f"{UTIL_PREFIX}.submit", new_callable=AsyncMock)
     async def test_returns_false_when_not_found(self, mock_submit, make_processor):
+        """Verify check_dedicated returns False when deployment state is 'not_found'."""
         mock_submit.return_value = {"deployments_state": "not_found"}
         p = make_processor()
         result = await p.check_dedicated(MagicMock())
@@ -205,6 +220,7 @@ class TestCheckDedicated:
     @pytest.mark.asyncio
     @patch(f"{UTIL_PREFIX}.submit", new_callable=AsyncMock)
     async def test_skips_non_dict_deployment_values(self, mock_submit, make_processor):
+        """Verify check_dedicated skips non-dict values and finds dedicated in remaining entries."""
         mock_submit.return_value = {
             "replica-1": "not_a_dict",
             "replica-2": {"dedicated": True},
@@ -216,6 +232,7 @@ class TestCheckDedicated:
     @pytest.mark.asyncio
     @patch(f"{UTIL_PREFIX}.submit", new_callable=AsyncMock)
     async def test_returns_false_when_all_non_dict_values(self, mock_submit, make_processor):
+        """Verify check_dedicated returns False when all deployment values are non-dict."""
         mock_submit.return_value = {
             "replica-1": "not_a_dict",
             "replica-2": 42,
@@ -239,6 +256,7 @@ class TestProvision:
     async def test_provision_deployed_sets_replica_ids(
         self, mock_ctrl_handle, mock_submit, make_processor, make_request
     ):
+        """Verify provision registers replica IDs and sets dedicated flag after successful deploy."""
         model_key = "meta-llama/Llama-2-7b"
         mock_ctrl_handle.return_value = MagicMock()
 
@@ -269,6 +287,7 @@ class TestProvision:
     async def test_provision_reports_evictions(
         self, mock_ctrl_handle, mock_submit, make_processor, make_request
     ):
+        """Verify provision queues eviction events for models displaced during deploy."""
         model_key = "meta-llama/Llama-2-7b"
         mock_ctrl_handle.return_value = MagicMock()
 
@@ -294,6 +313,7 @@ class TestProvision:
     async def test_provision_cant_accommodate_removes_replica(
         self, mock_ctrl_handle, mock_submit, make_processor, make_request
     ):
+        """Verify provision cancels the Processor when the only replica can't be accommodated."""
         model_key = "meta-llama/Llama-2-7b"
         mock_ctrl_handle.return_value = MagicMock()
 
@@ -319,6 +339,7 @@ class TestProvision:
     async def test_provision_invalid_status_removes_replica(
         self, mock_ctrl_handle, mock_submit, make_processor, make_request
     ):
+        """Verify provision cancels and reports an error for unrecognized deployment status."""
         model_key = "meta-llama/Llama-2-7b"
         mock_ctrl_handle.return_value = MagicMock()
 
@@ -345,6 +366,7 @@ class TestProvision:
     async def test_provision_non_dedicated_filters_non_hotswap(
         self, mock_ctrl_handle, mock_submit, make_processor, make_request
     ):
+        """Verify provision rejects non-hotswap requests when model is non-dedicated."""
         model_key = "meta-llama/Llama-2-7b"
         mock_ctrl_handle.return_value = MagicMock()
 
@@ -382,6 +404,7 @@ class TestProvision:
     async def test_provision_non_dedicated_no_hotswap_cancels(
         self, mock_ctrl_handle, mock_submit, make_processor, make_request
     ):
+        """Verify provision cancels when non-dedicated model has only non-hotswap requests."""
         mock_ctrl_handle.return_value = MagicMock()
 
         # check_dedicated returns False
@@ -405,6 +428,7 @@ class TestProvision:
     async def test_provision_exception_sets_cancelled(
         self, mock_ctrl_handle, mock_submit, make_processor, make_request
     ):
+        """Verify provision sets CANCELLED status and queues the error when an exception occurs."""
         mock_ctrl_handle.side_effect = RuntimeError("Controller unavailable")
 
         p = make_processor()
@@ -423,6 +447,7 @@ class TestProvision:
     async def test_provision_multiple_replicas(
         self, mock_ctrl_handle, mock_submit, make_processor, make_request
     ):
+        """Verify provision registers all replica IDs when deploying multiple replicas."""
         model_key = "meta-llama/Llama-2-7b"
         mock_ctrl_handle.return_value = MagicMock()
 
@@ -518,6 +543,7 @@ class TestRemoveReplica:
     """Test remove_replica() including last-replica cancellation."""
 
     def test_remove_existing_replica(self, make_processor):
+        """Verify removing a replica decreases the count and removes it from the set."""
         p = make_processor()
         p.replicas.add("r1")
         p.replicas.add("r2")
@@ -528,6 +554,7 @@ class TestRemoveReplica:
         assert p.replicas.replica_count == 1
 
     def test_remove_last_replica_cancels_and_purges(self, make_processor, make_request):
+        """Verify removing the last replica sets CANCELLED and purges the queue."""
         p = make_processor()
         p.replicas.add("r1")
         p.dedicated = True
@@ -547,6 +574,7 @@ class TestRemoveReplica:
         assert req.create_response.call_count == 2
 
     def test_remove_nonexistent_replica_does_nothing(self, make_processor):
+        """Verify removing a non-existent replica does not affect the replica set."""
         p = make_processor()
         p.replicas.add("r1")
         p.status = ProcessorStatus.READY
@@ -556,6 +584,7 @@ class TestRemoveReplica:
         assert p.replicas.replica_count == 1
 
     def test_remove_replica_sets_ready_when_no_in_flight(self, make_processor):
+        """Verify status resets to READY after removing a replica with no in-flight requests."""
         p = make_processor()
         p.replicas.add("r1")
         p.replicas.add("r2")
@@ -576,12 +605,14 @@ class TestAddReplica:
     """Test add_replica() and task spawning."""
 
     def test_add_new_replica(self, make_processor):
+        """Verify adding a new replica increases the replica count."""
         p = make_processor()
         p.add_replica("r1")
         assert p.replicas.has("r1")
         assert p.replicas.replica_count == 1
 
     def test_add_duplicate_replica_does_nothing(self, make_processor):
+        """Verify adding a duplicate replica ID does not change the count."""
         p = make_processor()
         p.replicas.add("r1")
         initial_count = p.replicas.replica_count
@@ -612,6 +643,7 @@ class TestAddReplica:
         assert p.replicas.has("r1")
 
     def test_add_replica_does_not_start_worker_when_provisioning(self, make_processor):
+        """Verify adding a replica during PROVISIONING does not spawn a worker task."""
         p = make_processor()
         p.status = ProcessorStatus.PROVISIONING
         p.add_replica("r1")
@@ -629,6 +661,7 @@ class TestKillRequest:
 
     @pytest.mark.asyncio
     async def test_kill_request_in_queue(self, make_processor, make_request):
+        """Verify kill_request removes a queued request and sends an ERROR response."""
         p = make_processor()
         p.dedicated = True
         req = make_request(request_id="req-to-kill")
@@ -649,6 +682,7 @@ class TestKillRequest:
     async def test_kill_request_in_flight(
         self, mock_get_handle, mock_submit, make_processor, make_request
     ):
+        """Verify kill_request cancels an in-flight request on the model actor."""
         mock_get_handle.return_value = MagicMock()
         mock_submit.return_value = None  # cancel returns None
 
@@ -663,6 +697,7 @@ class TestKillRequest:
 
     @pytest.mark.asyncio
     async def test_kill_request_not_found(self, make_processor):
+        """Verify kill_request returns 'not_found' for a non-existent request ID."""
         p = make_processor()
         result = await p.kill_request("nonexistent-req")
 
@@ -674,6 +709,7 @@ class TestKillRequest:
     async def test_kill_request_in_flight_error(
         self, mock_get_handle, mock_submit, make_processor
     ):
+        """Verify kill_request returns 'error' status when actor cancel raises an exception."""
         mock_get_handle.return_value = MagicMock()
         mock_submit.side_effect = RuntimeError("Actor crashed")
 
@@ -714,6 +750,7 @@ class TestGetState:
     """Test get_state() snapshot."""
 
     def test_empty_state(self, make_processor):
+        """Verify get_state returns correct defaults for an empty Processor."""
         p = make_processor()
         state = p.get_state()
 
@@ -725,6 +762,7 @@ class TestGetState:
         assert state["in_flight"] == 0
 
     def test_state_with_queued_requests(self, make_processor, make_request):
+        """Verify get_state includes request IDs for all queued requests."""
         p = make_processor()
         p.dedicated = True
 
@@ -737,6 +775,7 @@ class TestGetState:
         assert state["request_ids"] == ["r1", "r2"]
 
     def test_state_reflects_status_changes(self, make_processor):
+        """Verify get_state reflects the current status and a non-zero status_changed_at."""
         p = make_processor()
         p.status = ProcessorStatus.READY
         state = p.get_state()
@@ -745,6 +784,7 @@ class TestGetState:
         assert state["status_changed_at"] > 0
 
     def test_state_includes_replica_info(self, make_processor):
+        """Verify get_state includes replica IDs and current request mapping."""
         p = make_processor()
         p.replicas.add("r1")
         p.replicas.add("r2")
@@ -766,6 +806,7 @@ class TestPurge:
     """Test purge() error broadcasting."""
 
     def test_purge_sends_error_to_all_queued(self, make_processor, make_request):
+        """Verify purge sends an ERROR response to every queued request."""
         p = make_processor()
         p.dedicated = True
 
@@ -782,6 +823,7 @@ class TestPurge:
             assert last_call_args[0][0] == BackendResponseModel.JobStatus.ERROR
 
     def test_purge_default_message(self, make_processor, make_request):
+        """Verify purge uses 'Critical server error' as the default error message."""
         p = make_processor()
         p.dedicated = True
         req = make_request()
@@ -793,6 +835,7 @@ class TestPurge:
         assert "Critical server error" in last_call_args[0][2]
 
     def test_purge_custom_message(self, make_processor, make_request):
+        """Verify purge forwards a custom error message to queued requests."""
         p = make_processor()
         p.dedicated = True
         req = make_request()
@@ -804,6 +847,7 @@ class TestPurge:
         assert last_call_args[0][2] == "Custom error message"
 
     def test_purge_empty_queue_is_noop(self, make_processor):
+        """Verify purge does nothing and does not raise on an empty queue."""
         p = make_processor()
         # Should not raise
         p.purge("msg")
@@ -818,6 +862,7 @@ class TestDeploymentStatus:
     """Test that all expected deployment statuses exist."""
 
     def test_all_values(self):
+        """Verify all DeploymentStatus enum members have the expected string values."""
         assert DeploymentStatus.DEPLOYED.value == "deployed"
         assert DeploymentStatus.CACHED_AND_FREE.value == "cached_and_free"
         assert DeploymentStatus.FREE.value == "free"
@@ -826,6 +871,7 @@ class TestDeploymentStatus:
         assert DeploymentStatus.CANT_ACCOMMODATE.value == "cant_accommodate"
 
     def test_invalid_value_raises(self):
+        """Verify constructing DeploymentStatus with an invalid string raises ValueError."""
         with pytest.raises(ValueError):
             DeploymentStatus("nonexistent")
 
@@ -839,6 +885,7 @@ class TestProcessorStatusEnum:
     """Test ProcessorStatus enum values."""
 
     def test_all_values(self):
+        """Verify all ProcessorStatus enum members have the expected string values."""
         assert ProcessorStatus.UNINITIALIZED.value == "uninitialized"
         assert ProcessorStatus.PROVISIONING.value == "provisioning"
         assert ProcessorStatus.DEPLOYING.value == "deploying"

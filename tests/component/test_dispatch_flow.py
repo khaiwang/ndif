@@ -47,6 +47,7 @@ class TestDispatchFlow:
     """Test request routing through Dispatcher to Processors."""
 
     def test_dispatch_creates_processor_on_first_request(self):
+        """Verify that dispatching a request for a new model creates a Processor and starts its task."""
         dispatcher = _make_dispatcher()
         request = _make_mock_request()
 
@@ -58,6 +59,7 @@ class TestDispatchFlow:
         mock_asyncio.create_task.assert_called_once()
 
     def test_dispatch_reuses_processor_for_same_model(self):
+        """Verify that multiple requests for the same model reuse a single Processor."""
         dispatcher = _make_dispatcher()
         req1 = _make_mock_request(request_id="req-1")
         req2 = _make_mock_request(request_id="req-2")
@@ -73,6 +75,7 @@ class TestDispatchFlow:
         mock_asyncio.create_task.assert_called_once()
 
     def test_dispatch_creates_separate_processors_per_model(self):
+        """Verify that requests for different models each get their own Processor."""
         dispatcher = _make_dispatcher()
         req1 = _make_mock_request(model_key="model-a", request_id="req-1")
         req2 = _make_mock_request(model_key="model-b", request_id="req-2")
@@ -91,6 +94,7 @@ class TestEvictionFlow:
     """Test eviction event handling in Dispatcher."""
 
     def test_handle_evictions_removes_processor(self):
+        """Verify that a whole-model eviction event removes the Processor and calls purge."""
         dispatcher = _make_dispatcher()
 
         # Manually add a processor
@@ -106,6 +110,7 @@ class TestEvictionFlow:
         mock_processor.purge.assert_called_once_with("Model evicted")
 
     def test_handle_evictions_removes_specific_replica(self):
+        """Verify that a replica-specific eviction removes the replica but keeps the Processor."""
         dispatcher = _make_dispatcher()
         from src.services.api.src.queue.processor import ProcessorStatus
 
@@ -121,6 +126,7 @@ class TestEvictionFlow:
         assert "model-a" in dispatcher.processors
 
     def test_handle_evictions_removes_processor_when_last_replica(self):
+        """Verify that evicting the last replica removes the Processor when status is CANCELLED."""
         dispatcher = _make_dispatcher()
         from src.services.api.src.queue.processor import ProcessorStatus
 
@@ -139,6 +145,7 @@ class TestErrorFlow:
 
     @pytest.mark.asyncio
     async def test_handle_errors_connection_error_triggers_reconnect(self):
+        """Verify that a Ray connection error purges all processors and triggers reconnect."""
         dispatcher = _make_dispatcher()
         from src.services.api.src.queue.processor import ProcessorStatus
 
@@ -163,6 +170,7 @@ class TestErrorFlow:
 
     @pytest.mark.asyncio
     async def test_handle_errors_non_connection_resets_to_ready(self):
+        """Verify that a non-connection error resets the Processor status to READY."""
         dispatcher = _make_dispatcher()
         from src.services.api.src.queue.processor import ProcessorStatus
 
@@ -190,6 +198,7 @@ class TestEventHandlers:
 
     @pytest.mark.asyncio
     async def test_handle_deploy_event_updates_replica_count(self):
+        """Verify that a deploy event updates the Processor's requested replica count."""
         dispatcher = _make_dispatcher()
         mock_processor = MagicMock()
         mock_processor.requested_replica_count = 1
@@ -205,6 +214,7 @@ class TestEventHandlers:
 
     @pytest.mark.asyncio
     async def test_handle_deploy_event_ignores_unknown_model(self):
+        """Verify that a deploy event for an unknown model does not raise an error."""
         dispatcher = _make_dispatcher()
         event_data = {
             b"event_type": b"deploy",
@@ -216,6 +226,7 @@ class TestEventHandlers:
 
     @pytest.mark.asyncio
     async def test_handle_evict_event_removes_processor(self):
+        """Verify that an evict event removes the Processor from the dispatcher."""
         dispatcher = _make_dispatcher()
         mock_processor = MagicMock()
         mock_processor.status = MagicMock()
@@ -231,6 +242,7 @@ class TestEventHandlers:
 
     @pytest.mark.asyncio
     async def test_handle_queue_state_request(self):
+        """Verify that a queue state request returns pickled processor state via Redis."""
         dispatcher = _make_dispatcher()
 
         event_data = {
@@ -252,6 +264,7 @@ class TestEventHandlers:
 
     @pytest.mark.asyncio
     async def test_handle_kill_request_found(self):
+        """Verify that a kill request for an existing request returns a success status."""
         dispatcher = _make_dispatcher()
         mock_processor = MagicMock()
         mock_processor.kill_request = AsyncMock(return_value={
@@ -277,6 +290,7 @@ class TestEventHandlers:
 
     @pytest.mark.asyncio
     async def test_handle_kill_request_not_found(self):
+        """Verify that a kill request for a nonexistent request returns a not_found status."""
         dispatcher = _make_dispatcher()
         mock_processor = MagicMock()
         mock_processor.kill_request = AsyncMock(return_value={

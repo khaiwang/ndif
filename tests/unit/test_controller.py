@@ -94,12 +94,14 @@ class TestControllerDeploy:
     """Tests for _deploy() and async deploy()."""
 
     def test_sets_desired_replicas(self, controller):
+        """Verify _deploy sets desired_replicas for each model key."""
         controller.cluster.deploy.return_value = ({"result": {}}, False)
         controller._deploy(["model-a", "model-b"], replicas=2)
         assert controller.desired_replicas["model-a"] == 2
         assert controller.desired_replicas["model-b"] == 2
 
     def test_delegates_to_cluster_deploy(self, controller):
+        """Verify _deploy forwards model keys, dedicated, and replicas to cluster.deploy."""
         controller.cluster.deploy.return_value = ({"result": {}}, False)
         controller._deploy(["model-a"], dedicated=True, replicas=3)
         controller.cluster.deploy.assert_called_once_with(
@@ -107,6 +109,7 @@ class TestControllerDeploy:
         )
 
     def test_calls_adjust_desired(self, controller):
+        """Verify _deploy decrements desired_replicas for CANT_ACCOMMODATE results."""
         results = {"result": {("model-a", "r1"): "CANT_ACCOMMODATE"}}
         controller.cluster.deploy.return_value = (results, False)
         controller._deploy(["model-a"], replicas=2)
@@ -114,29 +117,34 @@ class TestControllerDeploy:
         assert controller.desired_replicas["model-a"] == 1
 
     def test_calls_apply_on_change(self, controller):
+        """Verify _deploy calls apply() when cluster reports a change."""
         controller.cluster.deploy.return_value = ({"result": {}}, True)
         with patch.object(controller, "apply") as mock_apply:
             controller._deploy(["model-a"])
             mock_apply.assert_called_once()
 
     def test_does_not_call_apply_when_no_change(self, controller):
+        """Verify _deploy skips apply() when cluster reports no change."""
         controller.cluster.deploy.return_value = ({"result": {}}, False)
         with patch.object(controller, "apply") as mock_apply:
             controller._deploy(["model-a"])
             mock_apply.assert_not_called()
 
     def test_returns_cluster_results(self, controller):
+        """Verify _deploy returns the results dict from cluster.deploy."""
         expected = {"result": {("model-a", "r1"): "FREE"}}
         controller.cluster.deploy.return_value = (expected, False)
         result = controller._deploy(["model-a"])
         assert result == expected
 
     def test_default_replicas_is_one(self, controller):
+        """Verify _deploy defaults to replicas=1 when not specified."""
         controller.cluster.deploy.return_value = ({"result": {}}, False)
         controller._deploy(["model-a"])
         assert controller.desired_replicas["model-a"] == 1
 
     def test_default_dedicated_is_false(self, controller):
+        """Verify _deploy defaults to dedicated=False when not specified."""
         controller.cluster.deploy.return_value = ({"result": {}}, False)
         controller._deploy(["model-a"])
         controller.cluster.deploy.assert_called_once_with(
@@ -145,6 +153,7 @@ class TestControllerDeploy:
 
     @pytest.mark.asyncio
     async def test_async_deploy_wraps_sync(self, controller):
+        """Verify async deploy() delegates to the synchronous _deploy logic."""
         controller.cluster.deploy.return_value = ({"result": {}}, False)
         with patch.object(controller, "apply"):
             result = await controller.deploy(["model-a"], replicas=2, dedicated=True)
@@ -162,12 +171,14 @@ class TestControllerEvict:
     """Tests for evict()."""
 
     def test_without_replica_keys_sets_desired_zero(self, controller):
+        """Verify evict without replica_keys sets desired_replicas to zero."""
         controller.cluster.evict.return_value = ({}, False)
         controller.evict(["model-a", "model-b"])
         assert controller.desired_replicas["model-a"] == 0
         assert controller.desired_replicas["model-b"] == 0
 
     def test_with_replica_keys_decrements_desired(self, controller):
+        """Verify evict with replica_keys decrements desired_replicas by the count evicted."""
         controller.desired_replicas["model-a"] = 3
         controller.cluster.evict.return_value = ({}, False)
         controller.evict(
@@ -177,6 +188,7 @@ class TestControllerEvict:
         assert controller.desired_replicas["model-a"] == 2
 
     def test_with_replica_keys_clamps_to_zero(self, controller):
+        """Verify evict with replica_keys does not decrement desired_replicas below zero."""
         controller.desired_replicas["model-a"] = 0
         controller.cluster.evict.return_value = ({}, False)
         controller.evict(
@@ -200,6 +212,7 @@ class TestControllerEvict:
         assert controller.desired_replicas["model-a"] == 1
 
     def test_delegates_to_cluster_evict(self, controller):
+        """Verify evict forwards model_keys and replica_keys to cluster.evict."""
         controller.cluster.evict.return_value = ({}, False)
         replica_keys = [("model-a", "r1")]
         controller.evict(["model-a"], replica_keys=replica_keys)
@@ -208,18 +221,21 @@ class TestControllerEvict:
         )
 
     def test_calls_apply_on_change(self, controller):
+        """Verify evict calls apply() when cluster reports a change."""
         controller.cluster.evict.return_value = ({}, True)
         with patch.object(controller, "apply") as mock_apply:
             controller.evict(["model-a"])
             mock_apply.assert_called_once()
 
     def test_does_not_call_apply_when_no_change(self, controller):
+        """Verify evict skips apply() when cluster reports no change."""
         controller.cluster.evict.return_value = ({}, False)
         with patch.object(controller, "apply") as mock_apply:
             controller.evict(["model-a"])
             mock_apply.assert_not_called()
 
     def test_returns_results(self, controller):
+        """Verify evict returns the results dict from cluster.evict."""
         expected = {("model-a", "r1"): {"status": "evicted"}}
         controller.cluster.evict.return_value = (expected, True)
         with patch.object(controller, "apply"):
@@ -227,6 +243,7 @@ class TestControllerEvict:
         assert result == expected
 
     def test_multiple_replica_keys_same_model(self, controller):
+        """Verify evicting multiple replicas of one model decrements desired by that count."""
         controller.desired_replicas["model-a"] = 3
         controller.cluster.evict.return_value = ({}, False)
         controller.evict(
@@ -245,6 +262,7 @@ class TestAdjustDesired:
     """Tests for _adjust_desired_for_cant_accommodate()."""
 
     def test_decrements_cant_accommodate(self, controller):
+        """Verify desired_replicas is decremented once per CANT_ACCOMMODATE result."""
         controller.desired_replicas["model-a"] = 3
         results = {
             "result": {
@@ -256,6 +274,7 @@ class TestAdjustDesired:
         assert controller.desired_replicas["model-a"] == 2
 
     def test_multiple_cant_accommodate(self, controller):
+        """Verify multiple CANT_ACCOMMODATE results decrement desired_replicas accordingly."""
         controller.desired_replicas["model-a"] = 3
         results = {
             "result": {
@@ -267,6 +286,7 @@ class TestAdjustDesired:
         assert controller.desired_replicas["model-a"] == 1
 
     def test_clamps_to_zero(self, controller):
+        """Verify desired_replicas does not go below zero after CANT_ACCOMMODATE adjustments."""
         controller.desired_replicas["model-a"] = 1
         results = {
             "result": {
@@ -278,6 +298,7 @@ class TestAdjustDesired:
         assert controller.desired_replicas["model-a"] == 0
 
     def test_no_cant_accommodate_no_change(self, controller):
+        """Verify desired_replicas is unchanged when no CANT_ACCOMMODATE results exist."""
         controller.desired_replicas["model-a"] = 3
         results = {"result": {("model-a", "r1"): "FREE"}}
         controller._adjust_desired_for_cant_accommodate(results)
@@ -293,6 +314,7 @@ class TestCurrentReplicaCount:
     """Tests for _current_replica_count()."""
 
     def test_counts_replicas_across_nodes(self, controller):
+        """Verify replica count sums replicas for a model across all cluster nodes."""
         node1 = MagicMock()
         node1.deployments = {"model-a": {"r1": MagicMock()}}
         node2 = MagicMock()
@@ -301,12 +323,14 @@ class TestCurrentReplicaCount:
         assert controller._current_replica_count("model-a") == 2
 
     def test_returns_zero_for_unknown_model(self, controller):
+        """Verify replica count returns zero when the model has no deployments."""
         node = MagicMock()
         node.deployments = {}
         controller.cluster.nodes = {"n1": node}
         assert controller._current_replica_count("nonexistent") == 0
 
     def test_empty_cluster(self, controller):
+        """Verify replica count returns zero when the cluster has no nodes."""
         controller.cluster.nodes = {}
         assert controller._current_replica_count("model-a") == 0
 
@@ -425,6 +449,7 @@ class TestControllerApply:
     """Tests for apply() — executes DeploymentDelta actions."""
 
     def test_calls_build(self, controller):
+        """Verify apply() invokes build() to compute the deployment delta."""
         with patch.object(controller, "build") as mock_build:
             from src.services.ray.src.ray.deployments.controller.controller import (
                 DeploymentDelta,
@@ -435,6 +460,7 @@ class TestControllerApply:
             mock_build.assert_called_once()
 
     def test_deletes_deployments(self, controller):
+        """Verify apply() calls delete() on each deployment in the to_delete list."""
         from src.services.ray.src.ray.deployments.controller.controller import (
             DeploymentDelta,
         )
@@ -569,6 +595,7 @@ class TestRemoveDeploymentFromState:
     """Tests for _remove_deployment_from_state()."""
 
     def test_removes_from_state_dict(self, controller):
+        """Verify the deployment's key is removed from the state dictionary."""
         dep = _make_deployment(model_key="model-a", replica_id="r1", node_id="n1")
         controller.state = {("n1", "model-a", "r1"): dep}
         controller.cluster.nodes = {}
@@ -577,6 +604,7 @@ class TestRemoveDeploymentFromState:
         assert ("n1", "model-a", "r1") not in controller.state
 
     def test_removes_from_node_deployments(self, controller):
+        """Verify the deployment is also removed from the node's deployments map."""
         from src.services.ray.src.ray.deployments.controller.cluster.node import (
             Node,
             Resources,
@@ -623,6 +651,7 @@ class TestMonitorDeployment:
 
     @pytest.mark.asyncio
     async def test_success_does_not_cleanup(self, controller):
+        """Verify successful monitoring does not trigger delete or state removal."""
         dep = MagicMock()
         dep.model_key = "model-a"
         future = MagicMock()
@@ -641,6 +670,7 @@ class TestMonitorDeployment:
 
     @pytest.mark.asyncio
     async def test_failure_cleans_up(self, controller):
+        """Verify monitoring failure triggers delete and state removal."""
         dep = MagicMock()
         dep.model_key = "model-a"
         future = MagicMock()
@@ -708,6 +738,7 @@ class TestControllerScale:
         controller.cluster.deploy.assert_not_called()
 
     def test_scale_deploys_when_below_target(self, controller):
+        """Verify scale() triggers deploy when current replicas are below the target."""
         node = MagicMock()
         node.deployments = {"model-a": {"r1": MagicMock()}}
         controller.cluster.nodes = {"n1": node}
@@ -720,10 +751,12 @@ class TestControllerScale:
         assert controller.desired_replicas["model-a"] == 3
 
     def test_scale_rejects_zero_replicas(self, controller):
+        """Verify scale() raises ValueError when replicas is zero."""
         with pytest.raises(ValueError, match="positive"):
             controller.scale("model-a", replicas=0)
 
     def test_scale_up_adds_replicas(self, controller):
+        """Verify scale_up() adds the specified count to the current replica count."""
         node = MagicMock()
         node.deployments = {"model-a": {"r1": MagicMock()}}
         controller.cluster.nodes = {"n1": node}
@@ -737,6 +770,7 @@ class TestControllerScale:
         assert controller.desired_replicas["model-a"] == 3
 
     def test_scale_up_rejects_zero(self, controller):
+        """Verify scale_up() raises ValueError when replicas is zero."""
         with pytest.raises(ValueError, match="positive"):
             controller.scale_up("model-a", replicas=0)
 
@@ -762,6 +796,7 @@ class TestGetState:
     """Tests for get_state()."""
 
     def test_returns_expected_keys(self, controller):
+        """Verify get_state() returns all expected top-level keys."""
         controller.cluster.get_state.return_value = {"nodes": []}
         state = controller.get_state()
         assert "cluster" in state
@@ -772,6 +807,7 @@ class TestGetState:
         assert "datetime" in state
 
     def test_values_match_init(self, controller):
+        """Verify get_state() returns the configuration values passed at init."""
         controller.cluster.get_state.return_value = {}
         state = controller.get_state()
         assert state["execution_timeout_seconds"] == 3600.0

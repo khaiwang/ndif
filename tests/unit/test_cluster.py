@@ -104,12 +104,14 @@ def _make_cluster(**kwargs):
 
 class TestClusterConstruction:
     def test_default_construction(self):
+        """Verify default Cluster attributes after construction with no arguments."""
         cluster = _make_cluster()
         assert cluster.nodes == {}
         assert cluster.minimum_deployment_time_seconds is None
         assert cluster.model_cache_percentage == 0.5
 
     def test_custom_construction(self):
+        """Verify Cluster respects custom minimum_deployment_time and cache_percentage values."""
         cluster = _make_cluster(
             minimum_deployment_time_seconds=120,
             model_cache_percentage=0.7,
@@ -186,6 +188,7 @@ class TestTargetReplicaIdsFor:
         assert len(result[1]) == 32  # new UUID
 
     def test_zero_replicas(self):
+        """Verify that requesting zero replicas returns an empty list."""
         cluster = _make_cluster()
         result = cluster.target_replica_ids_for(
             cached_replica_ids={"cached-1"},
@@ -580,6 +583,7 @@ class TestClusterEvict:
 
 class TestClusterGetState:
     def test_get_state_empty_cluster(self):
+        """Verify get_state returns empty nodes list for a cluster with no nodes."""
         cluster = _make_cluster()
         cluster.evaluator.get_state = MagicMock(return_value={"cache": {}})
         state = cluster.get_state()
@@ -588,6 +592,7 @@ class TestClusterGetState:
         assert state["nodes"] == []
 
     def test_get_state_with_nodes(self):
+        """Verify get_state includes node info when nodes are present."""
         cluster = _make_cluster()
         cluster.evaluator.get_state = MagicMock(return_value={"cache": {}})
         node = _make_node("n1", "node-1")
@@ -598,6 +603,7 @@ class TestClusterGetState:
         assert state["nodes"][0]["id"] == "n1"
 
     def test_get_state_excludes_ray_state_by_default(self):
+        """Verify get_state does not include ray_state key by default."""
         cluster = _make_cluster()
         cluster.evaluator.get_state = MagicMock(return_value={"cache": {}})
         state = cluster.get_state()

@@ -9,6 +9,9 @@ Prerequisites:
     - GPU required (auto-detected, skipped if unavailable)
 """
 
+from typing import Any
+
+
 import pytest
 import ray
 
@@ -99,7 +102,7 @@ class TestDeployEvict:
             controller.deploy.remote([test_model.model_key]),
             timeout=DEPLOY_TIMEOUT,
         )
-        statuses = list(result["result"].values())
+        statuses: list[Any] = list(result["result"].values())
         assert any("DEPLOYED" in str(s).upper() for s in statuses), (
             f"Expected DEPLOYED status on re-deploy, got: {statuses}"
         )

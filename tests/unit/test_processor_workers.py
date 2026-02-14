@@ -39,6 +39,7 @@ class TestExecuteOnReplica:
     async def test_sends_dispatched_response(
         self, mock_get_handle, mock_submit, make_processor, make_request
     ):
+        """Verify a DISPATCHED response is sent before submitting to the replica."""
         mock_get_handle.return_value = MagicMock()
         mock_submit.return_value = None
 
@@ -58,6 +59,7 @@ class TestExecuteOnReplica:
     async def test_calls_replica_submit_with_request(
         self, mock_get_handle, mock_submit, make_processor, make_request
     ):
+        """Verify the request is forwarded to the replica via submit."""
         mock_get_handle.return_value = MagicMock()
         mock_submit.return_value = None
 
@@ -78,6 +80,7 @@ class TestExecuteOnReplica:
     async def test_sets_and_clears_current_request(
         self, mock_get_handle, mock_submit, make_processor, make_request
     ):
+        """Verify current_request_id is set during execution and cleared after."""
         mock_get_handle.return_value = MagicMock()
 
         request_id_during_submit = []
@@ -104,6 +107,7 @@ class TestExecuteOnReplica:
     async def test_actor_not_found_triggers_eviction(
         self, mock_get_handle, mock_submit, make_processor, make_request
     ):
+        """Verify a missing actor error triggers CANCELLED status and eviction."""
         mock_get_handle.return_value = MagicMock()
         mock_submit.side_effect = RuntimeError(
             "Failed to look up actor with name xyz"
@@ -127,6 +131,7 @@ class TestExecuteOnReplica:
     async def test_generic_error_sends_error_response(
         self, mock_get_handle, mock_submit, make_processor, make_request
     ):
+        """Verify a non-actor-lookup error sends an ERROR response to the client."""
         mock_get_handle.return_value = MagicMock()
         mock_submit.side_effect = RuntimeError("Something went wrong")
 
@@ -146,6 +151,7 @@ class TestExecuteOnReplica:
     async def test_generic_error_puts_to_error_queue_not_eviction(
         self, mock_get_handle, mock_submit, make_processor, make_request
     ):
+        """Verify a generic error goes to error_queue and not eviction_queue."""
         mock_get_handle.return_value = MagicMock()
         err = RuntimeError("Something went wrong")
         mock_submit.side_effect = err
@@ -167,6 +173,7 @@ class TestExecuteOnReplica:
     async def test_clears_current_request_on_error(
         self, mock_get_handle, mock_submit, make_processor, make_request
     ):
+        """Verify current_request_id is cleared even when execution raises an error."""
         mock_get_handle.return_value = MagicMock()
         mock_submit.side_effect = RuntimeError("boom")
 
@@ -189,6 +196,7 @@ class TestReplicaWorker:
 
     @pytest.mark.asyncio
     async def test_dequeues_and_executes(self, make_processor, make_request):
+        """Verify the worker dequeues a request and calls _execute_on_replica."""
         p = make_processor()
         p.replicas.add("r1")
         p.status = ProcessorStatus.READY
@@ -207,6 +215,7 @@ class TestReplicaWorker:
 
     @pytest.mark.asyncio
     async def test_sets_busy_during_execution(self, make_processor, make_request):
+        """Verify processor status is set to BUSY while executing a request."""
         p = make_processor()
         p.replicas.add("r1")
         p.status = ProcessorStatus.READY
@@ -246,6 +255,7 @@ class TestReplicaWorker:
     async def test_stays_busy_when_other_replicas_in_flight(
         self, make_processor, make_request
     ):
+        """Verify status stays BUSY when another replica is still processing."""
         p = make_processor()
         p.replicas.add("r1")
         p.replicas.add("r2")
@@ -263,6 +273,7 @@ class TestReplicaWorker:
 
     @pytest.mark.asyncio
     async def test_stops_when_cancelled(self, make_processor, make_request):
+        """Verify the worker exits without processing when status is CANCELLED."""
         p = make_processor()
         p.replicas.add("r1")
         p.status = ProcessorStatus.CANCELLED
@@ -287,6 +298,7 @@ class TestReplicaWorker:
 
     @pytest.mark.asyncio
     async def test_calls_reply_after_dequeue(self, make_processor, make_request):
+        """Verify reply() is called after dequeuing and executing a request."""
         p = make_processor()
         p.replicas.add("r1")
         p.status = ProcessorStatus.READY
@@ -315,6 +327,7 @@ class TestStartReplicaWorker:
 
     @pytest.mark.asyncio
     async def test_creates_task(self, make_processor):
+        """Verify an asyncio task is created for the replica worker."""
         p = make_processor()
         p.replicas.add("r1")
 
@@ -333,6 +346,7 @@ class TestStartReplicaWorker:
 
     @pytest.mark.asyncio
     async def test_noop_if_already_running(self, make_processor):
+        """Verify a second call does not replace an already-running worker task."""
         p = make_processor()
         p.replicas.add("r1")
 
@@ -391,6 +405,7 @@ class TestInitializeAndStartReplica:
 
     @pytest.mark.asyncio
     async def test_error_reports_eviction_and_error(self, make_processor):
+        """Verify init failure queues both an eviction and an error entry."""
         from src.services.api.src.queue.replicas import Replica
 
         p = make_processor()
@@ -411,6 +426,7 @@ class TestInitializeAndStartReplica:
 
     @pytest.mark.asyncio
     async def test_error_removes_replica(self, make_processor):
+        """Verify a failed replica is removed from the replica set."""
         from src.services.api.src.queue.replicas import Replica
 
         p = make_processor()
@@ -436,6 +452,7 @@ class TestInitialize:
 
     @pytest.mark.asyncio
     async def test_all_replicas_succeed(self, make_processor):
+        """Verify status is unchanged when all replicas initialize successfully."""
         p = make_processor()
         p.replicas.add("r1")
         p.replicas.add("r2")
@@ -450,6 +467,7 @@ class TestInitialize:
 
     @pytest.mark.asyncio
     async def test_no_replicas_cancels_and_purges(self, make_processor, make_request):
+        """Verify having no replicas results in CANCELLED status and queue purge."""
         p = make_processor()
         # No replicas added
         p.status = ProcessorStatus.DEPLOYING
@@ -488,6 +506,7 @@ class TestInitialize:
 
     @pytest.mark.asyncio
     async def test_all_fail_cancels_and_purges(self, make_processor, make_request):
+        """Verify all replicas failing results in CANCELLED status and empty replica set."""
         p = make_processor()
         p.replicas.add("r1")
         p.replicas.add("r2")
@@ -540,6 +559,7 @@ class TestReplyWorker:
     @pytest.mark.asyncio
     @patch(f"{UTIL_PREFIX}.asyncio.sleep", new_callable=AsyncMock)
     async def test_sends_provisioning_message(self, mock_sleep, make_processor):
+        """Verify a 'Model Provisioning...' reply is sent during PROVISIONING."""
         p = make_processor()
         p.status = ProcessorStatus.PROVISIONING
 
@@ -555,6 +575,7 @@ class TestReplyWorker:
     @pytest.mark.asyncio
     @patch(f"{UTIL_PREFIX}.asyncio.sleep", new_callable=AsyncMock)
     async def test_sends_deploying_message(self, mock_sleep, make_processor):
+        """Verify a 'Model Deploying...' reply is sent during DEPLOYING."""
         p = make_processor()
         p.status = ProcessorStatus.DEPLOYING
 
@@ -569,6 +590,7 @@ class TestReplyWorker:
 
     @pytest.mark.asyncio
     async def test_exits_on_ready(self, make_processor):
+        """Verify the reply worker exits immediately when status is READY."""
         p = make_processor()
         p.status = ProcessorStatus.READY
 
@@ -577,6 +599,7 @@ class TestReplyWorker:
 
     @pytest.mark.asyncio
     async def test_exits_on_cancelled(self, make_processor):
+        """Verify the reply worker exits immediately when status is CANCELLED."""
         p = make_processor()
         p.status = ProcessorStatus.CANCELLED
 
@@ -633,6 +656,7 @@ class TestProcessorWorker:
 
     @pytest.mark.asyncio
     async def test_provision_cancelled_exits_early(self, make_processor):
+        """Verify processor exits without initializing when provision sets CANCELLED."""
         p = make_processor()
 
         async def cancel_during_provision():
@@ -649,6 +673,7 @@ class TestProcessorWorker:
 
     @pytest.mark.asyncio
     async def test_initialize_cancelled_exits_early(self, make_processor):
+        """Verify processor exits without starting workers when initialize sets CANCELLED."""
         p = make_processor()
 
         async def cancel_during_initialize():
@@ -666,6 +691,7 @@ class TestProcessorWorker:
 
     @pytest.mark.asyncio
     async def test_starts_reply_worker(self, make_processor):
+        """Verify the reply_worker coroutine is started during processor_worker."""
         p = make_processor()
 
         p.provision = AsyncMock()
@@ -681,6 +707,7 @@ class TestProcessorWorker:
 
     @pytest.mark.asyncio
     async def test_starts_all_replica_workers(self, make_processor):
+        """Verify a worker is started for every replica after successful init."""
         p = make_processor()
 
         async def add_replicas():
