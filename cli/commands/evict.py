@@ -3,6 +3,7 @@
 import click
 import ray
 import asyncio
+import time
 
 from ..lib.util import get_controller_actor_handle, get_model_key, notify_dispatcher
 from ..lib.checks import check_prerequisites
@@ -33,6 +34,8 @@ def evict(checkpoint: str, revision: str, evict_all: bool, ray_address: str, bro
     ray_address = ray_address or get_env("NDIF_RAY_ADDRESS")
     broker_url = broker_url or get_env("NDIF_BROKER_URL")
 
+    evict_start = time.time()
+
     try:
         # Check prerequisites silently
         check_prerequisites(broker_url=broker_url, ray_address=ray_address)
@@ -48,7 +51,9 @@ def evict(checkpoint: str, revision: str, evict_all: bool, ray_address: str, bro
 
         # Connect to Ray (suppress verbose output)
         click.echo(f"Connecting to Ray at {ray_address}...")
+        ray_connect_start = time.time()
         ray.init(address=ray_address, ignore_reinit_error=True, logging_level="error")
+        click.echo(f"Connected to Ray ({time.time() - ray_connect_start:.2f}s)")
 
         # Get controller actor handle
         click.echo("Getting controller handle...")
@@ -78,7 +83,9 @@ def evict(checkpoint: str, revision: str, evict_all: bool, ray_address: str, bro
             click.echo(f"Generating model key for {checkpoint} (revision: {revision})...")
 
             # TODO: revision bug ("main" is not always the default revision)
+            model_key_start = time.time()
             model_key = get_model_key(checkpoint, revision)
+            click.echo(f"Model key generated ({time.time() - model_key_start:.2f}s)")
 
             model_keys = [model_key]
 
@@ -88,8 +95,10 @@ def evict(checkpoint: str, revision: str, evict_all: bool, ray_address: str, bro
         else:
             click.echo(f"Evicting {len(model_keys)} model(s)...")
 
+        controller_start = time.time()
         object_ref = controller.evict.remote(model_keys=model_keys)
         results = ray.get(object_ref)
+        controller_time = time.time() - controller_start
 
         # Display results
         total_gpus_freed = 0
@@ -138,6 +147,9 @@ def evict(checkpoint: str, revision: str, evict_all: bool, ray_address: str, bro
 
             if not_found_count > 0:
                 click.echo(f"✗ {not_found_count} model(s) not found")
+
+        click.echo(f"Controller evict call took {controller_time:.2f}s")
+        click.echo(f"Total CLI evict time: {time.time() - evict_start:.2f}s")
 
     except Exception as e:
         click.echo(f"✗ Error: {e}", err=True)

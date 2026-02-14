@@ -3,6 +3,7 @@
 import click
 import ray
 import asyncio
+import time
 
 from ..lib.util import get_controller_actor_handle, get_model_key, notify_dispatcher
 from ..lib.checks import check_prerequisites
@@ -30,27 +31,34 @@ def deploy(checkpoint: str, revision: str, dedicated: bool, ray_address: str, br
     ray_address = ray_address or get_env("NDIF_RAY_ADDRESS")
     broker_url = broker_url or get_env("NDIF_BROKER_URL")
 
+    deploy_start = time.time()
+
     try:
         # Check prerequisites silently
         check_prerequisites(broker_url=broker_url, ray_address=ray_address)
         # Generate model_key using nnsight (loads to meta device, no actual model loading)
         click.echo(f"Generating model key for {checkpoint} (revision: {revision})...")
-        
+
         # TODO: revision bug ("main" is not always the default revision)
+        model_key_start = time.time()
         model_key = get_model_key(checkpoint, revision)
-        click.echo(f"Model key: {model_key}")
+        click.echo(f"Model key: {model_key} ({time.time() - model_key_start:.2f}s)")
 
         # Connect to Ray (suppress verbose output)
         click.echo(f"Connecting to Ray at {ray_address}...")
+        ray_connect_start = time.time()
         ray.init(address=ray_address, ignore_reinit_error=True, logging_level="error")
+        click.echo(f"Connected to Ray ({time.time() - ray_connect_start:.2f}s)")
 
         # Get controller actor handle and deploy the model
         click.echo(f"Getting actor handle for {model_key}...")
         controller = get_controller_actor_handle()
 
         click.echo(f"Deploying {model_key}...")
+        controller_start = time.time()
         object_ref = controller._deploy.remote(model_keys=[model_key], dedicated=dedicated)
         results = ray.get(object_ref)
+        controller_time = time.time() - controller_start
         result_status = results["result"][model_key]
 
         if result_status == "CANT_ACCOMMODATE":
@@ -68,6 +76,9 @@ def deploy(checkpoint: str, revision: str, dedicated: bool, ray_address: str, br
 
             # Notify dispatcher about deployment
             asyncio.run(notify_dispatcher(broker_url, "deploy", model_key))
+
+        click.echo(f"Controller deploy call took {controller_time:.2f}s")
+        click.echo(f"Total CLI deploy time: {time.time() - deploy_start:.2f}s")
 
     except Exception as e:
         click.echo(f"✗ Error: {e}", err=True)
