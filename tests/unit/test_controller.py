@@ -14,6 +14,8 @@ Tests cover:
 """
 
 import asyncio
+import os
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch, call
 
 import pytest
@@ -814,3 +816,616 @@ class TestGetState:
         assert state["model_cache_percentage"] == 0.5
         assert state["minimum_deployment_time_seconds"] == 3600.0
         assert state["replica_count"] == 1
+
+
+# ============================================================================
+# TestControllerInit
+# ============================================================================
+
+
+class TestControllerInit:
+    """Tests for __init__() — verifying initialization flow."""
+
+    def _make_actor(self, deployments=None, **overrides):
+        """Construct a _ControllerActor with all external deps mocked."""
+        if deployments is None:
+            deployments = []
+        kwargs = dict(
+            deployments=deployments,
+            model_import_path="test:app",
+            execution_timeout_seconds=3600.0,
+            model_cache_percentage=0.5,
+            minimum_deployment_time_seconds=3600.0,
+        )
+        kwargs.update(overrides)
+        with patch(f"{_MOD}.set_logger", return_value=MagicMock()):
+            with patch("asyncio.create_task") as mock_ct:
+                with patch(f"{_MOD}.Cluster") as MockCluster:
+                    mock_cluster = MagicMock()
+                    mock_cluster.nodes = {}
+                    MockCluster.return_value = mock_cluster
+                    with patch(f"{_MOD}.ray") as mock_ray:
+                        mock_ray.get_runtime_context.return_value = MagicMock()
+                        from src.services.ray.src.ray.deployments.controller.controller import (
+                            _ControllerActor,
+                        )
+
+                        actor = _ControllerActor(**kwargs)
+        return actor, MockCluster, mock_ct, mock_cluster
+
+    def test_instance_vars_set(self):
+        """Verify instance variables are set from constructor arguments."""
+        actor, _, _, _ = self._make_actor()
+        assert actor.model_import_path == "test:app"
+        assert actor.execution_timeout_seconds == 3600.0
+        assert actor.minimum_deployment_time_seconds == 3600.0
+        assert actor.model_cache_percentage == 0.5
+        assert actor.replica_count == 1
+        assert actor.desired_replicas == {}
+        assert actor.state == {}
+
+    def test_cluster_created_with_correct_params(self):
+        """Verify Cluster is created with minimum_deployment_time_seconds and model_cache_percentage."""
+        _, MockCluster, _, _ = self._make_actor(
+            minimum_deployment_time_seconds=7200.0,
+            model_cache_percentage=0.8,
+        )
+        MockCluster.assert_called_once_with(
+            minimum_deployment_time_seconds=7200.0,
+            model_cache_percentage=0.8,
+        )
+
+    def test_update_nodes_called_during_init(self):
+        """Verify cluster.update_nodes() is called during initialization."""
+        _, _, _, mock_cluster = self._make_actor()
+        mock_cluster.update_nodes.assert_called_once()
+
+    def test_empty_deployments_no_deploy(self):
+        """Verify _deploy is NOT called when deployments list is empty."""
+        with patch(f"{_MOD}.set_logger", return_value=MagicMock()):
+            with patch("asyncio.create_task"):
+                with patch(f"{_MOD}.Cluster") as MockCluster:
+                    mock_cluster = MagicMock()
+                    mock_cluster.nodes = {}
+                    MockCluster.return_value = mock_cluster
+                    with patch(f"{_MOD}.ray") as mock_ray:
+                        mock_ray.get_runtime_context.return_value = MagicMock()
+                        from src.services.ray.src.ray.deployments.controller.controller import (
+                            _ControllerActor,
+                        )
+
+                        actor = _ControllerActor(
+                            deployments=[],
+                            model_import_path="test:app",
+                            execution_timeout_seconds=3600.0,
+                            model_cache_percentage=0.5,
+                            minimum_deployment_time_seconds=3600.0,
+                        )
+        # cluster.deploy should not have been called
+        mock_cluster.deploy.assert_not_called()
+
+    def test_nonempty_deployments_calls_deploy(self):
+        """Verify _deploy is called with dedicated=True for non-empty deployments."""
+        with patch(f"{_MOD}.set_logger", return_value=MagicMock()):
+            with patch("asyncio.create_task"):
+                with patch(f"{_MOD}.Cluster") as MockCluster:
+                    mock_cluster = MagicMock()
+                    mock_cluster.nodes = {}
+                    mock_cluster.deploy.return_value = ({"result": {}}, False)
+                    MockCluster.return_value = mock_cluster
+                    with patch(f"{_MOD}.ray") as mock_ray:
+                        mock_ray.get_runtime_context.return_value = MagicMock()
+                        from src.services.ray.src.ray.deployments.controller.controller import (
+                            _ControllerActor,
+                        )
+
+                        actor = _ControllerActor(
+                            deployments=["model-a", "model-b"],
+                            model_import_path="test:app",
+                            execution_timeout_seconds=3600.0,
+                            model_cache_percentage=0.5,
+                            minimum_deployment_time_seconds=3600.0,
+                        )
+        mock_cluster.deploy.assert_called_once_with(
+            ["model-a", "model-b"], dedicated=True, replicas=1
+        )
+
+    def test_empty_string_deployments_no_deploy(self):
+        """Verify _deploy is NOT called when deployments is [''] (env var split artifact)."""
+        with patch(f"{_MOD}.set_logger", return_value=MagicMock()):
+            with patch("asyncio.create_task"):
+                with patch(f"{_MOD}.Cluster") as MockCluster:
+                    mock_cluster = MagicMock()
+                    mock_cluster.nodes = {}
+                    MockCluster.return_value = mock_cluster
+                    with patch(f"{_MOD}.ray") as mock_ray:
+                        mock_ray.get_runtime_context.return_value = MagicMock()
+                        from src.services.ray.src.ray.deployments.controller.controller import (
+                            _ControllerActor,
+                        )
+
+                        actor = _ControllerActor(
+                            deployments=[""],
+                            model_import_path="test:app",
+                            execution_timeout_seconds=3600.0,
+                            model_cache_percentage=0.5,
+                            minimum_deployment_time_seconds=3600.0,
+                        )
+        mock_cluster.deploy.assert_not_called()
+
+    def test_check_nodes_task_created(self):
+        """Verify asyncio.create_task is called for check_nodes()."""
+        _, _, mock_ct, _ = self._make_actor()
+        mock_ct.assert_called_once()
+
+
+# ============================================================================
+# TestCheckNodes
+# ============================================================================
+
+
+class TestCheckNodes:
+    """Tests for check_nodes() async loop."""
+
+    @pytest.mark.asyncio
+    async def test_calls_update_nodes(self, controller):
+        """Verify check_nodes calls cluster.update_nodes() each iteration."""
+        with patch("asyncio.sleep", side_effect=StopAsyncIteration):
+            with pytest.raises(StopAsyncIteration):
+                await controller.check_nodes()
+        controller.cluster.update_nodes.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_sleeps_default_interval(self, controller):
+        """Verify check_nodes sleeps for 30s by default."""
+        with patch("asyncio.sleep", side_effect=StopAsyncIteration) as mock_sleep:
+            with pytest.raises(StopAsyncIteration):
+                await controller.check_nodes()
+        mock_sleep.assert_called_once_with(30)
+
+    @pytest.mark.asyncio
+    async def test_respects_env_var_override(self, controller):
+        """Verify check_nodes respects NDIF_CONTROLLER_SYNC_INTERVAL_S env var."""
+        with patch.dict(os.environ, {"NDIF_CONTROLLER_SYNC_INTERVAL_S": "60"}):
+            with patch("asyncio.sleep", side_effect=StopAsyncIteration) as mock_sleep:
+                with pytest.raises(StopAsyncIteration):
+                    await controller.check_nodes()
+        mock_sleep.assert_called_once_with(60)
+
+
+# ============================================================================
+# TestGetDeploymentForReplica
+# ============================================================================
+
+
+class TestGetDeploymentForReplica:
+    """Tests for get_deployment_for_replica()."""
+
+    def test_found_returns_get_state(self, controller):
+        """Verify returns deployment.get_state() when found."""
+        dep = _make_deployment(model_key="model-a", replica_id="r1")
+        node = MagicMock()
+        node.deployments = {"model-a": {"r1": dep}}
+        controller.cluster.nodes = {"n1": node}
+
+        result = controller.get_deployment_for_replica("model-a", "r1")
+        assert result == dep.get_state()
+
+    def test_not_found_returns_not_found_dict(self, controller):
+        """Verify returns not_found dict when replica is not in any node."""
+        node = MagicMock()
+        node.deployments = {}
+        controller.cluster.nodes = {"n1": node}
+
+        result = controller.get_deployment_for_replica("model-a", "r1")
+        assert result == {
+            "model_key": "model-a",
+            "replica_id": "r1",
+            "deployment_state": "not_found",
+        }
+
+    def test_searches_across_nodes(self, controller):
+        """Verify searches multiple nodes to find the replica."""
+        dep = _make_deployment(model_key="model-a", replica_id="r1", node_id="n2")
+        node1 = MagicMock()
+        node1.deployments = {}
+        node2 = MagicMock()
+        node2.deployments = {"model-a": {"r1": dep}}
+        controller.cluster.nodes = {"n1": node1, "n2": node2}
+
+        result = controller.get_deployment_for_replica("model-a", "r1")
+        assert result == dep.get_state()
+
+
+# ============================================================================
+# TestGetDeployment
+# ============================================================================
+
+
+class TestGetDeployment:
+    """Tests for get_deployment()."""
+
+    def test_found_returns_all_replicas(self, controller):
+        """Verify returns dict of replica_id → get_state() for all replicas."""
+        dep1 = _make_deployment(model_key="model-a", replica_id="r1")
+        dep2 = _make_deployment(model_key="model-a", replica_id="r2")
+        node = MagicMock()
+        node.deployments = {"model-a": {"r1": dep1, "r2": dep2}}
+        controller.cluster.nodes = {"n1": node}
+
+        result = controller.get_deployment("model-a")
+        assert result == {
+            "r1": dep1.get_state(),
+            "r2": dep2.get_state(),
+        }
+
+    def test_not_found_returns_not_found_dict(self, controller):
+        """Verify returns not_found dict when model has no deployments."""
+        node = MagicMock()
+        node.deployments = {}
+        controller.cluster.nodes = {"n1": node}
+
+        result = controller.get_deployment("model-a")
+        assert result == {
+            "model_key": "model-a",
+            "deployments_state": "not_found",
+        }
+
+    def test_multiple_replicas_across_nodes(self, controller):
+        """Verify collects replicas from multiple nodes."""
+        dep1 = _make_deployment(model_key="model-a", replica_id="r1", node_id="n1")
+        dep2 = _make_deployment(model_key="model-a", replica_id="r2", node_id="n2")
+        node1 = MagicMock()
+        node1.deployments = {"model-a": {"r1": dep1}}
+        node2 = MagicMock()
+        node2.deployments = {"model-a": {"r2": dep2}}
+        controller.cluster.nodes = {"n1": node1, "n2": node2}
+
+        result = controller.get_deployment("model-a")
+        assert result == {
+            "r1": dep1.get_state(),
+            "r2": dep2.get_state(),
+        }
+
+
+# ============================================================================
+# TestEnv
+# ============================================================================
+
+
+class TestEnv:
+    """Tests for env()."""
+
+    def test_returns_python_version_and_packages(self, controller):
+        """Verify env() returns dict with python_version and packages keys."""
+        mock_dist = MagicMock()
+        mock_dist.metadata = {"Name": "requests"}
+        mock_dist.version = "2.31.0"
+
+        with patch(f"{_MOD}.distributions", return_value=[mock_dist]):
+            with patch(
+                f"{_MOD}.packages_distributions",
+                return_value={"requests": ["requests"]},
+            ):
+                result = controller.env()
+
+        assert "python_version" in result
+        assert "packages" in result
+
+    def test_python_version_matches_sys(self, controller):
+        """Verify python_version matches sys.version."""
+        with patch(f"{_MOD}.distributions", return_value=[]):
+            with patch(f"{_MOD}.packages_distributions", return_value={}):
+                result = controller.env()
+        assert result["python_version"] == sys.version
+
+    def test_packages_maps_import_name_to_version(self, controller):
+        """Verify packages maps import names to versions using packages_distributions."""
+        mock_dist = MagicMock()
+        mock_dist.metadata = {"Name": "Pillow"}
+        mock_dist.version = "10.0.0"
+
+        with patch(f"{_MOD}.distributions", return_value=[mock_dist]):
+            with patch(
+                f"{_MOD}.packages_distributions",
+                return_value={"PIL": ["Pillow"]},
+            ):
+                result = controller.env()
+
+        assert result["packages"]["PIL"] == "10.0.0"
+
+    def test_packages_fallback_to_dist_name(self, controller):
+        """Verify packages falls back to dist name when no import mapping exists."""
+        mock_dist = MagicMock()
+        mock_dist.metadata = {"Name": "my-tool"}
+        mock_dist.version = "1.0.0"
+
+        with patch(f"{_MOD}.distributions", return_value=[mock_dist]):
+            with patch(f"{_MOD}.packages_distributions", return_value={}):
+                result = controller.env()
+
+        assert result["packages"]["my-tool"] == "1.0.0"
+
+
+# ============================================================================
+# TestStatus
+# ============================================================================
+
+
+class TestStatus:
+    """Tests for status() — comprehensive deployment/cluster status."""
+
+    def _mock_actor_state(self, name, state):
+        """Create a mock actor state object."""
+        actor = MagicMock()
+        actor.name = name
+        actor.state = state
+        return actor
+
+    def _mock_evaluator_cache_entry(
+        self, repo_id="org/model", revision="main", n_params=1000000
+    ):
+        """Create a mock evaluator cache entry."""
+        entry = MagicMock()
+        entry.config._name_or_path = repo_id
+        entry.revision = revision
+        entry.config.to_json_string.return_value = '{"key": "value"}'
+        entry.n_params = n_params
+        return entry
+
+    def test_empty_cluster_returns_empty(self, controller):
+        """Verify status() returns empty dicts when cluster has no nodes."""
+        controller.cluster.nodes = {}
+        with patch(f"{_MOD}.list_actors", return_value=[]):
+            with patch(f"{_MOD}.get_downloaded_models", return_value=[]):
+                result = controller.status()
+        assert result["deployments"] == {}
+        assert result["cluster"]["nodes"] == {}
+
+    def test_hot_deployment_included(self, controller):
+        """Verify HOT deployment includes all expected fields."""
+        dep = _make_deployment(
+            model_key="model-a", replica_id="r1",
+            deployment_level=DeploymentLevel.HOT, dedicated=True,
+        )
+        node = MagicMock()
+        node.deployments = {"model-a": {"r1": dep}}
+        node.cache = {}
+        node.resources = MagicMock()
+        node.resources.total_gpus = 4
+        node.resources.gpu_memory_bytes = 80 * GIB
+        node.resources.available_gpus = [2, 3]
+        controller.cluster.nodes = {"n1": node}
+
+        cache_entry = self._mock_evaluator_cache_entry()
+        controller.cluster.evaluator = MagicMock()
+        controller.cluster.evaluator.cache = {"model-a": cache_entry}
+
+        actor_state = self._mock_actor_state("ModelActor:model-a:r1", "ALIVE")
+        with patch(f"{_MOD}.list_actors", return_value=[actor_state]):
+            with patch(f"{_MOD}.get_downloaded_models", return_value=[]):
+                result = controller.status()
+
+        app_name = "ModelActor:model-a:r1"
+        dep_status = result["deployments"][app_name]
+        assert dep_status["deployment_level"] == "HOT"
+        assert dep_status["dedicated"] is True
+        assert dep_status["model_key"] == "model-a"
+        assert dep_status["replica_id"] == "r1"
+        assert dep_status["repo_id"] == "org/model"
+        assert dep_status["revision"] == "main"
+        assert dep_status["n_params"] == 1000000
+        assert dep_status["application_state"] == "RUNNING"
+
+    def test_warm_cached_deployment(self, controller):
+        """Verify WARM cached deployment includes deployment_level=WARM."""
+        cached_dep = _make_deployment(
+            model_key="model-b", replica_id="r1",
+            deployment_level=DeploymentLevel.WARM,
+        )
+        node = MagicMock()
+        node.deployments = {}
+        node.cache = {"model-b": {"r1": cached_dep}}
+        node.resources = MagicMock()
+        node.resources.total_gpus = 4
+        node.resources.gpu_memory_bytes = 80 * GIB
+        node.resources.available_gpus = [0, 1, 2, 3]
+        controller.cluster.nodes = {"n1": node}
+
+        cache_entry = self._mock_evaluator_cache_entry(repo_id="org/model-b")
+        controller.cluster.evaluator = MagicMock()
+        controller.cluster.evaluator.cache = {"model-b": cache_entry}
+
+        with patch(f"{_MOD}.list_actors", return_value=[]):
+            with patch(f"{_MOD}.get_downloaded_models", return_value=[]):
+                result = controller.status()
+
+        app_name = "ModelActor:model-b:r1"
+        dep_status = result["deployments"][app_name]
+        assert dep_status["deployment_level"] == "WARM"
+        assert dep_status["model_key"] == "model-b"
+        assert dep_status["repo_id"] == "org/model-b"
+
+    def test_non_dedicated_has_schedule(self, controller):
+        """Verify non-dedicated deployment with minimum_deployment_time has schedule.end_time."""
+        dep = _make_deployment(
+            model_key="model-a", replica_id="r1",
+            deployment_level=DeploymentLevel.HOT, dedicated=False,
+        )
+        node = MagicMock()
+        node.deployments = {"model-a": {"r1": dep}}
+        node.cache = {}
+        node.resources = MagicMock()
+        node.resources.total_gpus = 4
+        node.resources.gpu_memory_bytes = 80 * GIB
+        node.resources.available_gpus = [2, 3]
+        controller.cluster.nodes = {"n1": node}
+        controller.minimum_deployment_time_seconds = 3600.0
+
+        cache_entry = self._mock_evaluator_cache_entry()
+        controller.cluster.evaluator = MagicMock()
+        controller.cluster.evaluator.cache = {"model-a": cache_entry}
+
+        actor_state = self._mock_actor_state("ModelActor:model-a:r1", "ALIVE")
+        with patch(f"{_MOD}.list_actors", return_value=[actor_state]):
+            with patch(f"{_MOD}.get_downloaded_models", return_value=[]):
+                result = controller.status()
+
+        app_name = "ModelActor:model-a:r1"
+        assert "schedule" in result["deployments"][app_name]
+        assert "end_time" in result["deployments"][app_name]["schedule"]
+
+    def test_dedicated_no_schedule(self, controller):
+        """Verify dedicated deployment does NOT have a schedule field."""
+        dep = _make_deployment(
+            model_key="model-a", replica_id="r1",
+            deployment_level=DeploymentLevel.HOT, dedicated=True,
+        )
+        node = MagicMock()
+        node.deployments = {"model-a": {"r1": dep}}
+        node.cache = {}
+        node.resources = MagicMock()
+        node.resources.total_gpus = 4
+        node.resources.gpu_memory_bytes = 80 * GIB
+        node.resources.available_gpus = [2, 3]
+        controller.cluster.nodes = {"n1": node}
+
+        cache_entry = self._mock_evaluator_cache_entry()
+        controller.cluster.evaluator = MagicMock()
+        controller.cluster.evaluator.cache = {"model-a": cache_entry}
+
+        actor_state = self._mock_actor_state("ModelActor:model-a:r1", "ALIVE")
+        with patch(f"{_MOD}.list_actors", return_value=[actor_state]):
+            with patch(f"{_MOD}.get_downloaded_models", return_value=[]):
+                result = controller.status()
+
+        app_name = "ModelActor:model-a:r1"
+        assert "schedule" not in result["deployments"][app_name]
+
+    def test_cold_downloaded_model(self, controller):
+        """Verify downloaded but not deployed model is listed as COLD."""
+        controller.cluster.nodes = {}
+
+        with patch(f"{_MOD}.list_actors", return_value=[]):
+            with patch(
+                f"{_MOD}.get_downloaded_models", return_value=["org/cold-model"]
+            ):
+                result = controller.status()
+
+        assert result["deployments"]["org/cold-model"] == {
+            "deployment_level": "COLD",
+            "repo_id": "org/cold-model",
+        }
+
+    def test_already_deployed_repo_not_duplicated_as_cold(self, controller):
+        """Verify a repo_id that is already deployed is NOT also listed as COLD."""
+        dep = _make_deployment(
+            model_key="model-a", replica_id="r1",
+            deployment_level=DeploymentLevel.HOT, dedicated=True,
+        )
+        node = MagicMock()
+        node.deployments = {"model-a": {"r1": dep}}
+        node.cache = {}
+        node.resources = MagicMock()
+        node.resources.total_gpus = 4
+        node.resources.gpu_memory_bytes = 80 * GIB
+        node.resources.available_gpus = [2, 3]
+        controller.cluster.nodes = {"n1": node}
+
+        cache_entry = self._mock_evaluator_cache_entry(repo_id="org/model-a")
+        controller.cluster.evaluator = MagicMock()
+        controller.cluster.evaluator.cache = {"model-a": cache_entry}
+
+        actor_state = self._mock_actor_state("ModelActor:model-a:r1", "ALIVE")
+        with patch(f"{_MOD}.list_actors", return_value=[actor_state]):
+            with patch(
+                f"{_MOD}.get_downloaded_models", return_value=["org/model-a"]
+            ):
+                result = controller.status()
+
+        # org/model-a should NOT appear as a separate COLD entry
+        cold_entries = [
+            k for k, v in result["deployments"].items()
+            if v.get("deployment_level") == "COLD"
+        ]
+        assert len(cold_entries) == 0
+
+    def test_ray_actor_states_mapped(self, controller):
+        """Verify Ray actor states are mapped correctly."""
+        dep_alive = _make_deployment(
+            model_key="model-a", replica_id="r1",
+            deployment_level=DeploymentLevel.HOT, dedicated=True,
+        )
+        dep_pending = _make_deployment(
+            model_key="model-b", replica_id="r1",
+            deployment_level=DeploymentLevel.HOT, dedicated=True,
+        )
+        dep_dead = _make_deployment(
+            model_key="model-c", replica_id="r1",
+            deployment_level=DeploymentLevel.HOT, dedicated=True,
+        )
+        node = MagicMock()
+        node.deployments = {
+            "model-a": {"r1": dep_alive},
+            "model-b": {"r1": dep_pending},
+            "model-c": {"r1": dep_dead},
+        }
+        node.cache = {}
+        node.resources = MagicMock()
+        node.resources.total_gpus = 8
+        node.resources.gpu_memory_bytes = 80 * GIB
+        node.resources.available_gpus = [4, 5, 6, 7]
+        controller.cluster.nodes = {"n1": node}
+
+        cache_a = self._mock_evaluator_cache_entry(repo_id="org/a")
+        cache_b = self._mock_evaluator_cache_entry(repo_id="org/b")
+        cache_c = self._mock_evaluator_cache_entry(repo_id="org/c")
+        controller.cluster.evaluator = MagicMock()
+        controller.cluster.evaluator.cache = {
+            "model-a": cache_a,
+            "model-b": cache_b,
+            "model-c": cache_c,
+        }
+
+        actors = [
+            self._mock_actor_state("ModelActor:model-a:r1", "ALIVE"),
+            self._mock_actor_state("ModelActor:model-b:r1", "PENDING_CREATION"),
+            self._mock_actor_state("ModelActor:model-c:r1", "DEAD"),
+        ]
+        with patch(f"{_MOD}.list_actors", return_value=actors):
+            with patch(f"{_MOD}.get_downloaded_models", return_value=[]):
+                result = controller.status()
+
+        assert result["deployments"]["ModelActor:model-a:r1"]["application_state"] == "RUNNING"
+        assert result["deployments"]["ModelActor:model-b:r1"]["application_state"] == "DEPLOYING"
+        assert result["deployments"]["ModelActor:model-c:r1"]["application_state"] == "UNHEALTHY"
+
+    def test_cluster_node_resources_in_output(self, controller):
+        """Verify cluster section includes node resources and deployment info."""
+        dep = _make_deployment(
+            model_key="model-a", replica_id="r1",
+            deployment_level=DeploymentLevel.HOT, dedicated=True,
+        )
+        node = MagicMock()
+        node.deployments = {"model-a": {"r1": dep}}
+        node.cache = {}
+        node.resources = MagicMock()
+        node.resources.total_gpus = 4
+        node.resources.gpu_memory_bytes = 80 * GIB
+        node.resources.available_gpus = [2, 3]
+        controller.cluster.nodes = {"n1": node}
+
+        cache_entry = self._mock_evaluator_cache_entry()
+        controller.cluster.evaluator = MagicMock()
+        controller.cluster.evaluator.cache = {"model-a": cache_entry}
+
+        actor_state = self._mock_actor_state("ModelActor:model-a:r1", "ALIVE")
+        with patch(f"{_MOD}.list_actors", return_value=[actor_state]):
+            with patch(f"{_MOD}.get_downloaded_models", return_value=[]):
+                result = controller.status()
+
+        cluster_node = result["cluster"]["nodes"]["n1"]
+        assert cluster_node["resources"]["total_gpus"] == 4
+        assert cluster_node["resources"]["gpu_memory_bytes"] == 80 * GIB
+        assert cluster_node["resources"]["available_gpus"] == [2, 3]
+        assert "model-a:r1" in cluster_node["deployments"]
