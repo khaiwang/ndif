@@ -245,6 +245,7 @@ class _ControllerActor:
             deployment_args = BaseModelDeploymentArgs(
                 model_key=deployment.model_key,
                 execution_timeout=self.execution_timeout_seconds,
+                spawn_timestamp=time.time(),
             )
 
             # create() returns None always, but may fail internally

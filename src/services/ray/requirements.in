@@ -1,5 +1,4 @@
 nnsight
-hf-transfer
 ray[serve]==2.50.0
 python-slugify
 # Telemetry

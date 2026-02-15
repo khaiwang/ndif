@@ -177,33 +177,18 @@ Inspection of `base.py` confirms zero transfer optimizations are in use:
 
 **Complexity:** Medium. Requires restructuring `apply()` and potentially splitting the model load into CPU-stage and GPU-stage.
 
-### P1: Enable hf_transfer for Faster Downloads (MEDIUM IMPACT)
+### ~~P1: Enable hf_transfer for Faster Downloads~~ (RULED OUT)
 
-**Problem:** Model downloads from HuggingFace Hub use default single-threaded HTTP. For first-time loads or cache misses, this is a major bottleneck.
+**Status:** Investigated and ruled out (2026-02-15).
 
-**Current state:**
-- `huggingface_hub` 0.36.2 is installed (supports `hf_transfer`)
-- `hf_transfer` is NOT installed
-- No `HF_HUB_ENABLE_HF_TRANSFER` env var is set
+**Finding:** `hf_transfer` is **obsolete** in our environment. Our `huggingface_hub` version (1.4.1) has completely removed the `HF_HUB_ENABLE_HF_TRANSFER` env var — it is silently ignored. The library has been replaced by `hf_xet`, which is already installed (v1.2.0) and enabled by default (`HF_HUB_DISABLE_XET=False`).
 
-**What `hf_transfer` does:**
-- Rust-based parallel download library
-- Splits each large file into chunks downloaded concurrently (~100 parallel chunks by default)
-- Can reach 500MB/s+ on high-bandwidth networks
-- 2-10x speedup per shard file
+However, `hf_xet` only accelerates downloads for model repos that have opted into **xet-enabled storage** on HuggingFace. Most models (including Qwen/Qwen2.5-7B-Instruct) have not migrated yet, so downloads fall back to standard HTTPS. We tested with `HF_HUB_ENABLE_HF_TRANSFER=1` and `hf-transfer` installed — download time was 115.9s vs the 117s baseline, confirming no benefit.
 
-**Limitation:** `hf_transfer` parallelizes within a single file but downloads shard files sequentially ([huggingface_hub#1831](https://github.com/huggingface/huggingface_hub/issues/1831)). For a 70B model with 15 shards, you still download one shard at a time.
-
-**Future:** `hf_xet` (in `huggingface_hub` v1.0+) replaces `hf_transfer` entirely and parallelizes at the chunk level across ALL files. This is the long-term solution but requires upgrading `huggingface_hub` and testing `nnsight` compatibility.
-
-**Proposed fix (Option A — quick win):**
-1. Add `hf-transfer` to `src/services/ray/requirements.in`
-2. Set `HF_HUB_ENABLE_HF_TRANSFER=1` in Ray container env
-3. Optionally set `HF_HUB_DOWNLOAD_TIMEOUT=3600` (default 10s is too short for large models)
-
-**Estimated savings:** 2-10x faster per-file download on first load. Most impactful for models not yet in disk cache.
-
-**Complexity:** Low. Just a package install + env var.
+**What would help instead:**
+- Pre-cache models on persistent storage so downloads only happen once
+- Wait for HuggingFace to roll out xet storage more broadly (migration is ongoing)
+- Use a model mirror/proxy closer to the network
 
 ### P2: Parallelize Multi-Model Evaluation (MEDIUM IMPACT)
 
@@ -326,16 +311,16 @@ torch.cuda.synchronize()
 
 | ID | Optimization | Savings | Complexity | Dependencies |
 |----|-------------|---------|------------|--------------|
-| **P1** | Enable `hf_transfer` | 2-10x download speed | Low | None |
+| **P1** | ~~Enable `hf_transfer`~~ | ~~2-10x download speed~~ | — | Ruled out: obsolete in huggingface_hub 1.4.1, xet not yet available for most models |
 | **P6** | Pinned memory for CPU↔GPU transfers | 1.5-3x faster transfers | Medium | None |
 | **P0** | Overlap evictions with actor creation | 5-60s | Medium | None |
 | **P4** | Separate download/deserialize from GPU dispatch | Minutes (large models) | Medium | Benefits from P0 |
 | **P7** | I/O batching + CUDA streams for transfers | 10-30% on top of P6 | Medium-High | Benefits from P6 |
 | **P2** | Parallelize multi-model evaluation | Seconds per extra model | Low | None |
-| **P3** | Pre-download weights during evaluation | Minutes (first load) | Medium-High | Benefits from P1 |
+| **P3** | Pre-download weights during evaluation | Minutes (first load) | Medium-High | None |
 | **P5** | Overlap provider connections + CUDA init | <1s | Low | None |
 
-**Recommended execution order:** P1 → P6 → P0 → P4 → P7 → P2 → P3 → P5
+**Recommended execution order:** P6 → P0 → P4 → P7 → P2 → P3 → P5
 
 ---
 

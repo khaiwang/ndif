@@ -38,6 +38,7 @@ from ...nn.security.protected_environment import (
     Protector,
 )
 from ...nn.security.protected_objects import protect
+from .pinned_pool import PinnedBufferPool
 from .util import kill_thread, load_with_cache_deletion_retry, remove_accelerate_hooks
 
 
@@ -49,6 +50,7 @@ class BaseModelDeployment:
         dispatch: bool,
         dtype: str | torch.dtype,
         target_gpus: List[int] | None = None,
+        spawn_timestamp: float | None = None,
         *args,
         extra_kwargs: Dict[str, Any] = {},
         **kwargs,
@@ -87,6 +89,17 @@ class BaseModelDeployment:
             torch.cuda.set_device(self.target_gpus[0])
         cuda_init_time = time.time() - cuda_init_start
 
+        # Use cudaHostRegister allocator for pin_memory=True. This avoids
+        # power-of-2 rounding and enables multi-threaded page registration.
+        try:
+            torch.cuda.memory._set_allocator_settings(
+                "pinned_use_cuda_host_register:True,pinned_num_register_threads:8"
+            )
+        except Exception:
+            self.logger.warning(
+                "cudaHostRegister allocator not available, using default"
+            )
+
         self.model = self.load_from_disk()
 
         security_start = time.time()
@@ -114,15 +127,22 @@ class BaseModelDeployment:
         StreamTracer.register(self.stream_send, self.stream_receive)
 
         init_time = time.time() - init_start
+        ray_overhead = init_start - spawn_timestamp if spawn_timestamp else 0.0
+        ModelLoadTimeMetric.update(ray_overhead, self.model_key, "ray_actor_overhead")
         ModelLoadTimeMetric.update(provider_time, self.model_key, "init_provider_connect")
         ModelLoadTimeMetric.update(cuda_init_time, self.model_key, "init_cuda_context")
         ModelLoadTimeMetric.update(security_time, self.model_key, "init_security_setup")
         ModelLoadTimeMetric.update(init_time, self.model_key, "init_total")
         self.logger.info(
             f"ModelActor.__init__ completed in {init_time:.2f}s "
-            f"(provider={provider_time:.2f}s, cuda_init={cuda_init_time:.2f}s, "
+            f"(ray_overhead={ray_overhead:.2f}s, provider={provider_time:.2f}s, "
+            f"cuda_init={cuda_init_time:.2f}s, "
             f"load_from_disk=see 'disk' metric, security={security_time:.2f}s)"
         )
+
+        # Pre-allocate pinned CPU buffers in the background for fast eviction.
+        self._pinned_pool: PinnedBufferPool | None = None
+        self._start_pinned_preallocation()
 
     def _build_max_memory(self) -> Optional[Dict[int, int]]:
         """Build a max_memory dict that restricts model placement to target GPUs.
@@ -167,6 +187,20 @@ class BaseModelDeployment:
                     f"Device placement mismatch! Expected GPUs {self.target_gpus}, "
                     f"but model is on {actual_cuda}"
                 )
+
+    def _start_pinned_preallocation(self) -> None:
+        """Release the old pool (if any) and start a new background pre-allocation."""
+        try:
+            if self._pinned_pool is not None:
+                self._pinned_pool.release()
+            pool = PinnedBufferPool()
+            pool.preallocate_async(self.model._module)
+            self._pinned_pool = pool
+        except Exception:
+            self.logger.warning(
+                "Failed to start pinned buffer pre-allocation", exc_info=True
+            )
+            self._pinned_pool = None
 
     def load_from_disk(self):
         start = time.time()
@@ -214,8 +248,33 @@ class BaseModelDeployment:
         hook_time = time.time() - hook_start
 
         transfer_start = time.time()
-        self.model._module = self.model._module.cpu()
-        torch.cuda.synchronize()
+        used_pinned = False
+        pool = self._pinned_pool
+
+        if pool is not None and pool.wait_ready(timeout=120.0):
+            # Pinned-memory fast path: DMA copies into pre-allocated buffers.
+            module = self.model._module
+            for name, param in module.named_parameters():
+                pinned_buf = pool.get(name)
+                if pinned_buf is not None:
+                    pinned_buf.copy_(param.data, non_blocking=True)
+                    param.data = pinned_buf
+            for name, buf in module.named_buffers():
+                pinned_buf = pool.get(name)
+                if pinned_buf is not None:
+                    pinned_buf.copy_(buf.data, non_blocking=True)
+                    buf.data = pinned_buf
+                elif buf.device.type != "cpu":
+                    buf.data = buf.data.cpu()
+            torch.cuda.synchronize()
+            used_pinned = True
+            self.logger.info("to_cache: used pinned memory path")
+        else:
+            # Fallback: standard unpinned transfer.
+            self.model._module = self.model._module.cpu()
+            torch.cuda.synchronize()
+            self.logger.info("to_cache: used fallback unpinned path")
+
         transfer_time = time.time() - transfer_start
 
         cleanup_start = time.time()
@@ -229,10 +288,14 @@ class BaseModelDeployment:
         ModelLoadTimeMetric.update(transfer_time, self.model_key, "to_cache_gpu_to_cpu")
         ModelLoadTimeMetric.update(cleanup_time, self.model_key, "to_cache_cleanup")
         ModelLoadTimeMetric.update(cache_time, self.model_key, "to_cache_total")
+        ModelLoadTimeMetric.update(
+            1.0 if used_pinned else 0.0, self.model_key, "to_cache_pinned"
+        )
         self.logger.info(
             f"Model cached in {cache_time:.2f}s "
             f"(cancel={cancel_time:.2f}s, hooks={hook_time:.2f}s, "
-            f"gpu_to_cpu={transfer_time:.2f}s, cleanup={cleanup_time:.2f}s)"
+            f"gpu_to_cpu={transfer_time:.2f}s, cleanup={cleanup_time:.2f}s, "
+            f"pinned={used_pinned})"
         )
 
     def from_cache(self, target_gpus: List[int]):
@@ -260,19 +323,54 @@ class BaseModelDeployment:
         )
 
         max_memory = self._build_max_memory()
+        module = self.model._module
 
-        device_map_start = time.time()
-        device_map = _get_device_map(self.model._module, "auto", max_memory, None)
-        device_map_time = time.time() - device_map_start
+        # Decide whether to use the single-GPU pinned fast path.
+        use_fast_path = (
+            len(self.target_gpus) == 1
+            and self._pinned_pool is not None
+            and self._pinned_pool.is_ready
+        )
 
-        hook_start = time.time()
-        remove_accelerate_hooks(self.model._module)
-        hook_time = time.time() - hook_start
+        if use_fast_path:
+            # Single-GPU fast path: non_blocking copies from pinned memory.
+            self.logger.info("from_cache: single-GPU fast path (pinned)")
+            target_device = torch.device(f"cuda:{self.target_gpus[0]}")
 
-        dispatch_start = time.time()
-        self.model._module = dispatch_model(self.model._module, device_map)
-        torch.cuda.synchronize()
-        dispatch_time = time.time() - dispatch_start
+            hook_start = time.time()
+            remove_accelerate_hooks(module)
+            hook_time = time.time() - hook_start
+
+            dispatch_start = time.time()
+            for name, param in module.named_parameters():
+                param.data = param.data.to(target_device, non_blocking=True)
+            for name, buf in module.named_buffers():
+                buf.data = buf.data.to(target_device, non_blocking=True)
+            torch.cuda.synchronize()
+            dispatch_time = time.time() - dispatch_start
+
+            # Set hf_device_map to match what dispatch_model would produce.
+            module.hf_device_map = {
+                name: str(self.target_gpus[0])
+                for name, _ in module.named_modules()
+            }
+            device_map_time = 0.0
+        else:
+            # Multi-GPU or unpinned: use dispatch_model for cross-device hooks.
+            self.logger.info("from_cache: multi-GPU/unpinned path")
+
+            device_map_start = time.time()
+            device_map = _get_device_map(module, "auto", max_memory, None)
+            device_map_time = time.time() - device_map_start
+
+            hook_start = time.time()
+            remove_accelerate_hooks(module)
+            hook_time = time.time() - hook_start
+
+            dispatch_start = time.time()
+            self.model._module = dispatch_model(module, device_map)
+            torch.cuda.synchronize()
+            dispatch_time = time.time() - dispatch_start
 
         cleanup_start = time.time()
         gc.collect()
@@ -287,14 +385,21 @@ class BaseModelDeployment:
         ModelLoadTimeMetric.update(dispatch_time, self.model_key, "from_cache_cpu_to_gpu")
         ModelLoadTimeMetric.update(cleanup_time, self.model_key, "from_cache_cleanup")
         ModelLoadTimeMetric.update(load_time, self.model_key, "cache")
+        ModelLoadTimeMetric.update(
+            1.0 if use_fast_path else 0.0, self.model_key, "from_cache_fast_path"
+        )
 
         self.logger.info(
             f"Model loaded from cache in {load_time:.2f}s "
             f"(device_map={device_map_time:.2f}s, hooks={hook_time:.2f}s, "
-            f"cpu_to_gpu={dispatch_time:.2f}s, cleanup={cleanup_time:.2f}s)"
+            f"cpu_to_gpu={dispatch_time:.2f}s, cleanup={cleanup_time:.2f}s, "
+            f"fast_path={use_fast_path})"
         )
 
         self.cached = False
+
+        # Pre-allocate pinned buffers for the next eviction cycle.
+        self._start_pinned_preallocation()
 
     async def __call__(self, request: BackendRequestModel) -> None:
         """Executes the model service pipeline:
@@ -566,6 +671,7 @@ class BaseModelDeploymentArgs(BaseModel):
     dispatch: bool = True
     dtype: str | torch.dtype = "bfloat16"
     target_gpus: List[int] | None = None
+    spawn_timestamp: float | None = None
 
 
 @ray.remote(num_cpus=2, num_gpus=0, max_restarts=-1)
