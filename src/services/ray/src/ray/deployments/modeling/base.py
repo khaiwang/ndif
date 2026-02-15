@@ -188,9 +188,21 @@ class BaseModelDeployment:
                     f"but model is on {actual_cuda}"
                 )
 
-    def _start_pinned_preallocation(self) -> None:
-        """Release the old pool (if any) and start a new background pre-allocation."""
+    def _start_pinned_preallocation(self, reuse_ok: bool = False) -> None:
+        """Ensure a pinned buffer pool is ready for the next eviction cycle.
+
+        Args:
+            reuse_ok: If True, keep the existing pool when its layout still
+                matches the current model (same parameter names, shapes, dtypes).
+                This avoids an expensive free+realloc of pinned memory between
+                evict/reload cycles where the model architecture hasn't changed.
+        """
         try:
+            if reuse_ok and self._pinned_pool is not None and self._pinned_pool.is_ready:
+                if self._pinned_pool.matches(self.model._module):
+                    self.logger.info("Reusing existing pinned buffer pool")
+                    return
+
             if self._pinned_pool is not None:
                 self._pinned_pool.release()
             pool = PinnedBufferPool()
@@ -398,8 +410,8 @@ class BaseModelDeployment:
 
         self.cached = False
 
-        # Pre-allocate pinned buffers for the next eviction cycle.
-        self._start_pinned_preallocation()
+        # Keep the existing pinned pool if its layout still matches (same model).
+        self._start_pinned_preallocation(reuse_ok=True)
 
     async def __call__(self, request: BackendRequestModel) -> None:
         """Executes the model service pipeline:

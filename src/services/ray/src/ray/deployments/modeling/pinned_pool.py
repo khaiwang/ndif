@@ -63,6 +63,39 @@ class PinnedBufferPool:
         """Return the pinned view for *name*, or ``None``."""
         return self._views.get(name)
 
+    def matches(self, module: nn.Module) -> bool:
+        """Return True if this pool's layout matches *module*'s parameters/buffers.
+
+        Checks that every unique tensor in the module has a corresponding view
+        in the pool with the same shape and dtype.
+        """
+        seen_ptrs: set[int] = set()
+        expected: list[tuple[str, torch.Size, torch.dtype]] = []
+
+        for name, param in module.named_parameters():
+            ptr = param.data.data_ptr()
+            if ptr in seen_ptrs:
+                continue
+            seen_ptrs.add(ptr)
+            expected.append((name, param.data.shape, param.data.dtype))
+
+        for name, buf in module.named_buffers():
+            ptr = buf.data_ptr()
+            if ptr in seen_ptrs:
+                continue
+            seen_ptrs.add(ptr)
+            expected.append((name, buf.shape, buf.dtype))
+
+        if len(expected) != len(self._views):
+            return False
+
+        for name, shape, dtype in expected:
+            view = self._views.get(name)
+            if view is None or view.shape != shape or view.dtype != dtype:
+                return False
+
+        return True
+
     def release(self) -> None:
         """Explicitly free all pinned chunks and views."""
         self._views.clear()
