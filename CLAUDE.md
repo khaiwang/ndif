@@ -2,9 +2,15 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository. Please update this file as you make changes to the codebase with the rules you realized.
 
+## Workflow
+
+Always explain your plan before writing code. Do not start implementing until the plan is approved. If the task involves multiple files or steps, present a numbered plan first.
+
 ## Project Overview
 
 NDIF (National Deep Inference Fabric) is a distributed inference server that lets researchers run transparent experiments on large AI models via [nnsight](https://github.com/ndif-team/nnsight). Users submit serialized intervention code that executes in a security sandbox on shared GPU infrastructure.
+
+This is a Python project. Primary language is Python. Tests use pytest. Always run the full test suite (`pytest`) after making test changes to verify no regressions or hanging tests.
 
 ## Build & Run Commands
 
@@ -46,6 +52,8 @@ pytest --run-remote tests/test_nnsight.py::TestBasicTracing
 ```
 
 Tests requiring a remote server are auto-skipped unless `--run-remote` is passed. The host defaults to `http://localhost:5001` and can also be set via `NDIF_HOST` env var.
+
+When adding tests, keep test files at a manageable size. If a test file exceeds ~300 lines or ~20 test methods, proactively suggest splitting it into logical sub-files before committing.
 
 ## Linting
 
@@ -119,3 +127,15 @@ All config via environment variables. See `.env.example` for defaults. Key varia
 
 - `fastapi==0.108.0` and `python-socketio==5.13.0` are pinned for Socket.IO compatibility — do not upgrade without testing Socket.IO.
 - Python >=3.12, <3.14
+
+## Git
+
+When working with git worktrees, always confirm the current worktree/branch before making changes. Run `git worktree list` and verify you are in the correct directory before any edits.
+
+## General Rules
+
+When creating or editing files, double-check you are modifying the correct file. Do not edit existing CLAUDE.md or config files meant for other purposes — create new files when instructed to do so.
+
+## Communication Style
+
+Be concise and precise in responses. Avoid verbose explanations unless the user asks for detail. Prefer actionable, specific output over general commentary.
