@@ -1,4 +1,5 @@
 import logging
+import threading
 import time
 from typing import Dict, Union, Any
 
@@ -28,6 +29,7 @@ class ModelEvaluator:
         self.padding_factor = padding_factor
 
         self.cache: Dict[MODEL_KEY, CacheEntry] = {}
+        self._cache_lock = threading.Lock()
 
         torch.set_default_dtype(torch.bfloat16)
 
@@ -47,12 +49,13 @@ class ModelEvaluator:
         }
 
     def __call__(self, model_key: MODEL_KEY) -> Union[float, Exception]:
-        if model_key in self.cache:
-            logger.info(
-                f"=> Model {model_key} already in evaluation cache. Size: {self.cache[model_key].size_in_bytes}"
-            )
+        with self._cache_lock:
+            if model_key in self.cache:
+                logger.info(
+                    f"=> Model {model_key} already in evaluation cache. Size: {self.cache[model_key].size_in_bytes}"
+                )
 
-            return self.cache[model_key].size_in_bytes
+                return self.cache[model_key].size_in_bytes
 
         eval_start = time.time()
 
@@ -79,12 +82,13 @@ class ModelEvaluator:
 
         model_size_bytes += model_size_bytes * self.padding_factor
 
-        self.cache[model_key] = CacheEntry(
-            model_size_bytes,
-            n_params,
-            meta_model._model.config,
-            meta_model.revision,
-        )
+        with self._cache_lock:
+            self.cache[model_key] = CacheEntry(
+                model_size_bytes,
+                n_params,
+                meta_model._model.config,
+                meta_model.revision,
+            )
 
         eval_time = time.time() - eval_start
         ModelLoadTimeMetric.update(eval_time, model_key, "evaluation")

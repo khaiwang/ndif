@@ -1,6 +1,7 @@
 import logging
 import random
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
 
 import ray
@@ -132,10 +133,12 @@ class Cluster:
 
         change = False
 
-        # First get the size of the models in bytes
-        model_sizes_in_bytes = {
-            model_key: self.evaluator(model_key) for model_key in model_keys
-        }
+        # First get the size of the models in bytes (parallel for multi-model)
+        with ThreadPoolExecutor(max_workers=min(len(model_keys), 4)) as executor:
+            futures = {executor.submit(self.evaluator, key): key for key in model_keys}
+            model_sizes_in_bytes = {
+                futures[future]: future.result() for future in futures
+            }
 
         for model_key, size_in_bytes in list(model_sizes_in_bytes.items()):
             if isinstance(size_in_bytes, Exception):

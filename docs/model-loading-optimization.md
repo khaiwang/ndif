@@ -78,7 +78,7 @@ Client Request
 
 #### Step 4c: Apply Delta — From Cache (WARM → HOT)
 - **File:** `src/services/ray/src/ray/deployments/controller/controller.py`
-- **What:** Calls `actor.from_cache.remote(target_gpus)` to move model CPU→GPU. Single-GPU: direct `.to(dev, non_blocking=True)` from pinned memory, skips device_map. Multi-GPU: falls back to `dispatch_model()`.
+- **What:** Calls `actor.from_cache.remote(target_gpus)` to move model CPU→GPU. Single-GPU: chunk bulk transfer (~8 chunks instead of ~200 params) from pinned memory, skips device_map. Multi-GPU: falls back to `dispatch_model()`.
 - **Bound:** CPU→GPU transfer. 0.7-10s with pinned memory (was 5-60s).
 - **Dependencies:** Step 4b evictions must complete first.
 - **Note:** Monitored asynchronously via `_monitor_deployment()` — this part is already non-blocking.
@@ -121,7 +121,7 @@ Client Request
 #### Step 6e: GPU Dispatch (After Evictions Complete)
 - **File:** `base.py:248-291`
 - **What:** `dispatch_to_gpu()` — called by the controller after evictions finish. Moves model from CPU to target GPUs:
-  - Single-GPU: direct `.to(target, non_blocking=True)` + manual `hf_device_map`
+  - Single-GPU: multi-stream (4 streams) `.to(target, non_blocking=True)` + manual `hf_device_map`
   - Multi-GPU: accelerate `_get_device_map()` + `dispatch_model()`
 - **Bound:** GPU (PCIe transfer). 0.5-10s.
 - **Dependencies:** Step 6c (CPU load complete) + Step 4b (evictions complete).
@@ -157,13 +157,14 @@ NVIDIA NNsight profiling by the Delta team identified the following phases in th
 | I/O bandwidth underutilization | Improved batching strategies for efficient data transfer |
 | Stalls in model loading and CPU–GPU communication | Adoption of pinned memory for accelerated data transfers |
 
-### Current Transfer Implementation (After P6 Optimization)
+### Current Transfer Implementation (After P6+P7 Optimization)
 
 - **`to_cache()` (GPU→CPU):** Pre-allocated pinned buffer pool + `non_blocking=True` DMA copies. Falls back to `.cpu()` if pool unavailable.
-- **`from_cache()` (CPU→GPU):** Single-GPU fast path with `non_blocking=True` from pinned memory, skips `dispatch_model()`. Multi-GPU falls back to `dispatch_model()`.
+- **`from_cache()` (CPU→GPU):** Single-GPU fast path with chunk bulk transfer — transfers ~8 contiguous pinned chunks to GPU instead of ~200 individual `.to()` calls, then reassigns `param.data` to GPU-side views. Multi-GPU falls back to `dispatch_model()`.
 - **`load_from_disk()` (disk→CPU):** Uses `from_model_key(..., device_map="cpu")` — loads weights to CPU only. Runs in parallel with evictions.
-- **`dispatch_to_gpu()` (CPU→GPU):** Called after evictions complete. Single-GPU: direct `.to(target, non_blocking=True)`. Multi-GPU: accelerate `dispatch_model()`.
+- **`dispatch_to_gpu()` (CPU→GPU):** Called after evictions complete. Single-GPU: multi-stream (4 streams) round-robin transfer to overlap CUDA API dispatch overhead. Multi-GPU: accelerate `dispatch_model()`.
 - **Pool reuse:** Pinned buffer pool is reused across eviction cycles via `matches()` — no reallocation overhead. Pre-allocated after `dispatch_to_gpu()` when GPU placement is known.
+- **Chunk layout:** `PinnedBufferPool` stores its packing plan (`_plan`) so `transfer_to_device()` can create GPU-side typed views from bulk-transferred chunks.
 
 ---
 
@@ -209,17 +210,19 @@ However, `hf_xet` only accelerates downloads for model repos that have opted int
 - Wait for HuggingFace to roll out xet storage more broadly (migration is ongoing)
 - Use a model mirror/proxy closer to the network
 
-### P2: Parallelize Multi-Model Evaluation (MEDIUM IMPACT)
+### P2: Parallelize Multi-Model Evaluation ✅ IMPLEMENTED
 
-**Problem:** `cluster.py:193` calls `self.evaluator(model_key)` sequentially in a loop. Each evaluation loads the model on meta device (1-30s uncached).
+**Status:** Fully implemented (2026-02-15).
 
-**Why it matters:** When deploying multiple models simultaneously (e.g., at startup via `NDIF_DEPLOYMENTS`), evaluations are serialized even though they're independent.
+**What was done:**
+1. **Thread-safe evaluator cache** in `evaluator.py`: Added `threading.Lock` to protect `self.cache` reads/writes, allowing concurrent evaluations without race conditions. The lock is only held during cache lookups and writes — the actual evaluation (meta-device model loading) runs without the lock held.
+2. **Parallel evaluation** in `cluster.py`: Replaced sequential dict comprehension with `ThreadPoolExecutor` (capped at 4 workers to avoid overwhelming HuggingFace Hub or CPU).
 
-**Proposed fix:** Use `concurrent.futures.ThreadPoolExecutor` or `asyncio.gather()` to evaluate models in parallel.
+**Estimated savings:** N×(1-30s) → max(1-30s) for N uncached models. Only relevant when deploying multiple models at once (e.g., startup via `NDIF_DEPLOYMENTS`).
 
-**Estimated savings:** N×(1-30s) → max(1-30s) for N models. Only relevant when deploying multiple models at once.
-
-**Complexity:** Low.
+**Key files:**
+- `src/services/ray/src/ray/deployments/controller/cluster/evaluator.py` — `_cache_lock` for thread-safety
+- `src/services/ray/src/ray/deployments/controller/cluster/cluster.py` — `ThreadPoolExecutor` parallel evaluation
 
 ### P3: Pre-download Model Weights During Evaluation (MEDIUM-HIGH IMPACT)
 
@@ -270,25 +273,24 @@ However, `hf_xet` only accelerates downloads for model repos that have opted int
 - `src/services/ray/src/ray/deployments/modeling/pinned_pool.py` — PinnedBufferPool
 - `src/services/ray/src/ray/deployments/modeling/base.py` — to_cache, from_cache, pool lifecycle
 
-### P7: Improved I/O Batching for Data Transfer (MEDIUM IMPACT)
+### P7: Chunk-Based Bulk Transfers for CPU↔GPU ✅ IMPLEMENTED
 
-**Problem:** The Delta team's benchmarks show I/O bandwidth underutilization during model loading. Current transfers move one parameter tensor at a time through `dispatch_model()`, which iterates parameters sequentially. Small tensors (bias terms, layer norms) create many small transfers with high per-transfer overhead.
+**Status:** Fully implemented (2026-02-15).
 
-**Proposed fix:**
-1. **Batch small tensors:** Coalesce small parameter tensors into larger contiguous buffers before transfer, then scatter back to individual tensors on the target device.
-2. **Pipeline transfers with CUDA streams:** Use multiple CUDA streams to overlap PCIe transfers with GPU-side memory operations:
-   ```python
-   streams = [torch.cuda.Stream() for _ in range(num_streams)]
-   for i, (name, param) in enumerate(model.named_parameters()):
-       with torch.cuda.stream(streams[i % num_streams]):
-           param.data = param.data.to(device, non_blocking=True)
-   torch.cuda.synchronize()
-   ```
-3. **Double-buffering:** While one batch of parameters is being transferred, prepare the next batch in a second pinned buffer. This keeps the PCIe bus continuously saturated.
+**What was done:**
+1. **`from_cache()` chunk bulk transfer:** Instead of ~200 individual `.to()` calls (one per parameter), `PinnedBufferPool.transfer_to_device()` transfers ~8 contiguous uint8 chunks to GPU in bulk, then creates typed GPU-side views. `from_cache()` reassigns `param.data` and `buf.data` to these views. Reduces Python loop overhead, CUDA API overhead, and driver dispatch overhead.
+2. **`dispatch_to_gpu()` multi-stream:** Uses 4 CUDA streams with round-robin assignment to overlap CUDA API/driver dispatch overhead across streams. Since model tensors loaded from disk are scattered in CPU memory (not in the pinned pool), chunk bulk transfer isn't applicable here.
+3. **`to_cache()` skipped:** GPU tensors are scattered across GPU memory, so coalescing would require an extra GPU staging buffer. The current 0.59s is already near PCIe 4.0 limits.
 
-**Estimated savings:** 10-30% additional throughput on top of pinned memory gains, primarily from reducing per-transfer overhead for small tensors.
+**Key implementation details:**
+- `PinnedBufferPool._plan` now persists the chunk packing layout (chunk_idx, offset, nbytes, dtype, shape, name) from `preallocate()`.
+- `transfer_to_device(device)` copies raw chunks to GPU, then creates typed views matching the plan offsets — no extra GPU memory needed beyond the model itself.
 
-**Complexity:** Medium-High. Requires custom transfer pipeline replacing `dispatch_model()`.
+**Expected impact:** ~10-20% reduction in `from_cache` transfer overhead (fewer CUDA API calls), ~5-10% for `dispatch_to_gpu` (multi-stream overlap). Needs measurement.
+
+**Key files:**
+- `src/services/ray/src/ray/deployments/modeling/pinned_pool.py` — `_plan`, `transfer_to_device()`
+- `src/services/ray/src/ray/deployments/modeling/base.py` — `from_cache()` bulk path, `dispatch_to_gpu()` multi-stream
 
 ---
 
@@ -299,12 +301,12 @@ However, `hf_xet` only accelerates downloads for model repos that have opted int
 | **P6** | Pinned memory for CPU↔GPU transfers | ~5x faster warm cycle | Medium | ✅ Done |
 | **P1** | ~~Enable `hf_transfer`~~ | — | — | ❌ Ruled out |
 | **P0+P4** | Overlap evictions + two-phase load | Overlaps spawn+CPU load with evictions | Medium | ✅ Done |
-| **P7** | I/O batching + CUDA streams for transfers | 10-30% on top of P6 | Medium-High | Next |
-| **P2** | Parallelize multi-model evaluation | Seconds per extra model | Low | — |
+| **P7** | Chunk bulk transfers + multi-stream dispatch | 10-20% on top of P6 | Medium | ✅ Done |
+| **P2** | Parallelize multi-model evaluation | Seconds per extra model | Low | ✅ Done |
 | **P3** | Pre-download weights during evaluation | Minutes (first load) | Medium-High | — |
 | **P5** | Overlap provider connections + CUDA init | <1s | Low | — |
 
-**Recommended next:** P7 → P2 → P3 → P5
+**Recommended next:** P3 → P5
 
 ---
 
