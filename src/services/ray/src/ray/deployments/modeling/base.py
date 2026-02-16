@@ -38,7 +38,7 @@ from ...nn.security.protected_environment import (
     Protector,
 )
 from ...nn.security.protected_objects import protect
-from .pinned_pool import PinnedBufferPool
+from .pinned_pool import PinnedBufferPool, unique_named_tensors
 from .util import kill_thread, load_with_cache_deletion_retry, remove_accelerate_hooks
 
 
@@ -306,18 +306,13 @@ class BaseModelDeployment:
         if pool is not None and pool.wait_ready(timeout=120.0):
             # Pinned-memory fast path: DMA copies into pre-allocated buffers.
             module = self.model._module
-            for name, param in module.named_parameters():
+            for name, tensor in unique_named_tensors(module):
                 pinned_buf = pool.get(name)
                 if pinned_buf is not None:
-                    pinned_buf.copy_(param.data, non_blocking=True)
-                    param.data = pinned_buf
-            for name, buf in module.named_buffers():
-                pinned_buf = pool.get(name)
-                if pinned_buf is not None:
-                    pinned_buf.copy_(buf.data, non_blocking=True)
-                    buf.data = pinned_buf
-                elif buf.device.type != "cpu":
-                    buf.data = buf.data.cpu()
+                    pinned_buf.copy_(tensor.data, non_blocking=True)
+                    tensor.data = pinned_buf
+                elif tensor.device.type != "cpu":
+                    tensor.data = tensor.data.cpu()
             torch.cuda.synchronize()
             used_pinned = True
             self.logger.info("to_cache: used pinned memory path")
