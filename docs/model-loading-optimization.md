@@ -305,8 +305,19 @@ However, `hf_xet` only accelerates downloads for model repos that have opted int
 | **P2** | Parallelize multi-model evaluation | Seconds per extra model | Low | ✅ Done |
 | **P3** | Pre-download weights during evaluation | Minutes (first load) | Medium-High | — |
 | **P5** | Overlap provider connections + CUDA init | <1s | Low | — |
+| **P8** | Pinned staging ring buffer for `dispatch_to_gpu()` | ~5–7s on cold deploy (est. 1.5–2x) | High | ⏸ Deferred |
 
 **Recommended next:** P3 → P5
+
+### P8 — Pinned staging ring buffer for `dispatch_to_gpu()` (Deferred)
+
+**Problem:** The initial disk→GPU transfer in `dispatch_to_gpu()` uses ~200 individual `.to()` calls on unpinned mmap-backed CPU memory. CUDA must internally bounce each through a small pinned staging buffer, and `non_blocking=True` is effectively synchronous for unpinned sources.
+
+**Proposed approach:** Allocate a small double-buffered pinned ring (2 × 256 MiB = 512 MiB). Pack tensors into batches that fit one staging buffer. While one buffer DMA's to GPU on a CUDA stream, fill the next from mmap on CPU. Handles oversized tensors by slicing across multiple batches into a pre-allocated GPU destination.
+
+**Estimated gain:** For a model already in CPU RAM (page cache), pinned DMA achieves ~25 GB/s vs ~10–15 GB/s through CUDA's internal unpinned staging. For a 140 GiB model: ~10–14s → ~5.6–7s. However, this is a **one-time cost** during initial deployment — the frequent evict/reload path (`from_cache`) already uses `PinnedBufferPool` bulk transfers.
+
+**Why deferred:** The complexity is high (~170 lines of manual buffer management, CUDA stream/event sync, oversized tensor splitting, tied parameter expansion) for a one-time operation. A simpler single-buffer approach could capture most of the benefit with less code. Revisit if cold-deploy latency becomes a priority.
 
 ---
 

@@ -42,6 +42,33 @@ from .pinned_pool import PinnedBufferPool, unique_named_tensors
 from .util import kill_thread, load_with_cache_deletion_retry, remove_accelerate_hooks
 
 
+def _set_single_gpu_device_map(module: torch.nn.Module, gpu_id: int) -> None:
+    """Set ``hf_device_map`` on *module* to map every sub-module to *gpu_id*."""
+    module.hf_device_map = {
+        name: str(gpu_id) for name, _ in module.named_modules()
+    }
+
+
+def _reassign_module_data(
+    module: torch.nn.Module,
+    gpu_views: Dict[str, torch.Tensor],
+    target_device: torch.device,
+) -> None:
+    """Point every parameter/buffer in *module* at the corresponding GPU tensor.
+
+    Tensors present in *gpu_views* are reassigned directly.  Buffers not in
+    *gpu_views* that are still on CPU are moved to *target_device*.
+    """
+    for name, param in module.named_parameters():
+        if name in gpu_views:
+            param.data = gpu_views[name]
+    for name, buf in module.named_buffers():
+        if name in gpu_views:
+            buf.data = gpu_views[name]
+        elif buf.device.type != "cuda":
+            buf.data = buf.data.to(target_device, non_blocking=True)
+
+
 class BaseModelDeployment:
     def __init__(
         self,
@@ -250,21 +277,19 @@ class BaseModelDeployment:
         module = self.model._module
 
         if len(self.target_gpus) == 1:
-            # Single-GPU fast path with multi-stream dispatch to overlap
-            # CUDA API/driver overhead across streams.
+            # Single-GPU fast path: multi-stream transfer of deduplicated
+            # tensors, then reassign via gpu_views dict.
             target_device = torch.device(f"cuda:{self.target_gpus[0]}")
             remove_accelerate_hooks(module)
             num_streams = 4
             streams = [torch.cuda.Stream(device=target_device) for _ in range(num_streams)]
-            all_tensors = list(module.parameters()) + list(module.buffers())
-            for i, tensor in enumerate(all_tensors):
+            gpu_views: Dict[str, torch.Tensor] = {}
+            for i, (name, tensor) in enumerate(unique_named_tensors(module)):
                 with torch.cuda.stream(streams[i % num_streams]):
-                    tensor.data = tensor.data.to(target_device, non_blocking=True)
+                    gpu_views[name] = tensor.data.to(target_device, non_blocking=True)
             torch.cuda.synchronize()
-            module.hf_device_map = {
-                name: str(self.target_gpus[0])
-                for name, _ in module.named_modules()
-            }
+            _reassign_module_data(module, gpu_views, target_device)
+            _set_single_gpu_device_map(module, self.target_gpus[0])
         else:
             # Multi-GPU: use accelerate dispatch_model
             remove_accelerate_hooks(module)
@@ -392,24 +417,11 @@ class BaseModelDeployment:
             dispatch_start = time.time()
             gpu_views = self._pinned_pool.transfer_to_device(target_device)
             torch.cuda.synchronize()
-
-            # Reassign param.data / buf.data to the GPU-side views.
-            for name, param in module.named_parameters():
-                if name in gpu_views:
-                    param.data = gpu_views[name]
-            for name, buf in module.named_buffers():
-                if name in gpu_views:
-                    buf.data = gpu_views[name]
-                elif buf.device.type != "cuda":
-                    buf.data = buf.data.to(target_device, non_blocking=True)
+            _reassign_module_data(module, gpu_views, target_device)
             torch.cuda.synchronize()
             dispatch_time = time.time() - dispatch_start
 
-            # Set hf_device_map to match what dispatch_model would produce.
-            module.hf_device_map = {
-                name: str(self.target_gpus[0])
-                for name, _ in module.named_modules()
-            }
+            _set_single_gpu_device_map(module, self.target_gpus[0])
             device_map_time = 0.0
         else:
             # Multi-GPU or unpinned: use dispatch_model for cross-device hooks.
