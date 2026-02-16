@@ -167,7 +167,7 @@ class _ControllerActor:
 
         deployment_delta = self.build()
 
-        # Delete deployments
+        # 1. Delete deployments
         delete_start = time.time()
         for deployment in deployment_delta.deployments_to_delete:
             deployment.delete()
@@ -175,7 +175,7 @@ class _ControllerActor:
         if deployment_delta.deployments_to_delete:
             self.logger.info(f"Deleted {len(deployment_delta.deployments_to_delete)} deployments in {delete_time:.2f}s")
 
-        # Cache deployments - must complete before from_cache can proceed to free up resources
+        # 2. Fire evictions (non-blocking)
         cache_start = time.time()
         cache_futures = []
         cache_deployments = []
@@ -186,7 +186,6 @@ class _ControllerActor:
                 cache_futures.append(cache_future)
                 cache_deployments.append(deployment)
             else:
-                # cache() failed immediately - clean up
                 self.logger.error(
                     f"Failed to initiate cache for {deployment.model_key}"
                 )
@@ -196,7 +195,22 @@ class _ControllerActor:
                     pass
                 self._remove_deployment_from_state(deployment)
 
-        # Wait for all cache operations to complete before proceeding
+        # 3. Start ALL creates immediately — __init__ loads to CPU only, no GPU needed
+        create_start = time.time()
+        create_deployments = []
+        for name, deployment in deployment_delta.deployments_to_create:
+            deployment_args = BaseModelDeploymentArgs(
+                model_key=deployment.model_key,
+                execution_timeout=self.execution_timeout_seconds,
+                spawn_timestamp=time.time(),
+            )
+            deployment.create(name, deployment_args)
+            create_deployments.append(deployment)
+        create_dispatch_time = time.time() - create_start
+        if create_deployments:
+            self.logger.info(f"Dispatched {len(create_deployments)} actor creations (CPU load) in {create_dispatch_time:.2f}s")
+
+        # 4. Block on evictions — must finish before GPU dispatch / from_cache
         for future, deployment in zip(cache_futures, cache_deployments):
             evict_start = time.time()
             try:
@@ -220,7 +234,13 @@ class _ControllerActor:
         if cache_deployments:
             self.logger.info(f"All evictions completed in {cache_total_time:.2f}s (blocked)")
 
-        # Deploy models from cache - spawn monitoring tasks
+        # 5. Wait for actor CPU init, then dispatch to GPU (async per actor)
+        for deployment in create_deployments:
+            asyncio.create_task(
+                self._monitor_create_and_dispatch(deployment)
+            )
+
+        # 6. Deploy models from cache — GPUs now free after evictions
         from_cache_start = time.time()
         for deployment in deployment_delta.deployments_from_cache:
             future = deployment.from_cache()
@@ -229,7 +249,6 @@ class _ControllerActor:
                     self._monitor_deployment(future, deployment, "from_cache")
                 )
             else:
-                # from_cache() failed immediately - clean up
                 self.logger.error(
                     f"Failed to initiate from_cache for {deployment.model_key}"
                 )
@@ -238,36 +257,6 @@ class _ControllerActor:
         from_cache_dispatch_time = time.time() - from_cache_start
         if deployment_delta.deployments_from_cache:
             self.logger.info(f"Dispatched {len(deployment_delta.deployments_from_cache)} from_cache tasks in {from_cache_dispatch_time:.2f}s")
-
-        # Create models from disk - spawn monitoring tasks
-        create_start = time.time()
-        for name, deployment in deployment_delta.deployments_to_create:
-            deployment_args = BaseModelDeploymentArgs(
-                model_key=deployment.model_key,
-                execution_timeout=self.execution_timeout_seconds,
-                spawn_timestamp=time.time(),
-            )
-
-            # create() returns None always, but may fail internally
-            deployment.create(name, deployment_args)
-
-            # Get the actor handle and monitor its ready state
-            try:
-                actor = deployment.actor
-                ready_future = actor.__ray_ready__.remote()
-                asyncio.create_task(
-                    self._monitor_deployment(ready_future, deployment, "create")
-                )
-            except Exception as e:
-                # create() failed or actor not available - clean up
-                self.logger.error(
-                    f"Failed to get actor handle for {deployment.model_key}: {e}"
-                )
-                deployment.delete()
-                self._remove_deployment_from_state(deployment)
-        create_dispatch_time = time.time() - create_start
-        if deployment_delta.deployments_to_create:
-            self.logger.info(f"Dispatched {len(deployment_delta.deployments_to_create)} actor creation tasks in {create_dispatch_time:.2f}s")
 
         apply_time = time.time() - apply_start
         self.logger.info(f"apply() completed in {apply_time:.2f}s (eviction_blocking={cache_total_time:.2f}s)")
@@ -304,6 +293,48 @@ class _ControllerActor:
             )
             # Delete the failed deployment to return resources
             # Wrap in try-catch as the actor may already be gone
+            try:
+                deployment.delete()
+            except Exception as delete_error:
+                self.logger.debug(
+                    f"Error deleting failed deployment {deployment.model_key}: {delete_error}"
+                )
+            self._remove_deployment_from_state(deployment)
+
+    async def _monitor_create_and_dispatch(self, deployment: Deployment) -> None:
+        """Wait for actor CPU init to complete, then dispatch model to GPU.
+
+        The actor __init__ loads weights to CPU only. Once that finishes and
+        evictions have freed GPU memory, this calls dispatch_to_gpu() to move
+        the model onto the target GPUs.
+        """
+        start = time.time()
+        try:
+            actor = deployment.actor
+            # Wait for __init__ (CPU load) to complete
+            await asyncio.get_event_loop().run_in_executor(
+                None, lambda: ray.get(actor.__ray_ready__.remote())
+            )
+            cpu_time = time.time() - start
+            self.logger.info(
+                f"Deployment {deployment.model_key} CPU init completed in {cpu_time:.2f}s"
+            )
+
+            # Dispatch to GPU
+            dispatch_future = actor.dispatch_to_gpu.remote()
+            await asyncio.get_event_loop().run_in_executor(
+                None, lambda: ray.get(dispatch_future)
+            )
+            total_time = time.time() - start
+            ModelLoadTimeMetric.update(total_time, deployment.model_key, "monitor_create")
+            self.logger.info(
+                f"Deployment {deployment.model_key} fully deployed in {total_time:.2f}s "
+                f"(cpu_init={cpu_time:.2f}s, gpu_dispatch={total_time - cpu_time:.2f}s)"
+            )
+        except Exception as e:
+            self.logger.error(
+                f"Deployment {deployment.model_key} failed during create+dispatch: {e}"
+            )
             try:
                 deployment.delete()
             except Exception as delete_error:

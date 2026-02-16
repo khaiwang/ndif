@@ -114,7 +114,6 @@ class BaseModelDeployment:
         if dispatch:
             self.model._module.requires_grad_(False)
 
-        torch.cuda.empty_cache()
         security_time = time.time() - security_start
 
         self.request: BackendRequestModel
@@ -132,17 +131,16 @@ class BaseModelDeployment:
         ModelLoadTimeMetric.update(provider_time, self.model_key, "init_provider_connect")
         ModelLoadTimeMetric.update(cuda_init_time, self.model_key, "init_cuda_context")
         ModelLoadTimeMetric.update(security_time, self.model_key, "init_security_setup")
-        ModelLoadTimeMetric.update(init_time, self.model_key, "init_total")
+        ModelLoadTimeMetric.update(init_time, self.model_key, "init_cpu_total")
         self.logger.info(
-            f"ModelActor.__init__ completed in {init_time:.2f}s "
+            f"ModelActor.__init__ completed (CPU) in {init_time:.2f}s "
             f"(ray_overhead={ray_overhead:.2f}s, provider={provider_time:.2f}s, "
             f"cuda_init={cuda_init_time:.2f}s, "
-            f"load_from_disk=see 'disk' metric, security={security_time:.2f}s)"
+            f"load_from_disk=see 'disk_cpu_load' metric, security={security_time:.2f}s)"
         )
 
-        # Pre-allocate pinned CPU buffers in the background for fast eviction.
+        # Pinned pool is allocated after dispatch_to_gpu() when GPU placement is known.
         self._pinned_pool: PinnedBufferPool | None = None
-        self._start_pinned_preallocation()
 
     def _build_max_memory(self) -> Optional[Dict[int, int]]:
         """Build a max_memory dict that restricts model placement to target GPUs.
@@ -216,36 +214,75 @@ class BaseModelDeployment:
 
     def load_from_disk(self):
         start = time.time()
-        torch.cuda.synchronize()
         self.logger.info(
-            f"Loading model from disk for model key {self.model_key} "
+            f"Loading model from disk (CPU) for model key {self.model_key} "
             f"targeting GPUs {self.target_gpus}..."
         )
-
-        max_memory = self._build_max_memory()
 
         model = load_with_cache_deletion_retry(
             lambda: RemoteableMixin.from_model_key(
                 self.model_key,
-                device_map="auto",
-                max_memory=max_memory,
+                device_map="cpu",
                 dispatch=self.dispatch,
                 torch_dtype=self.dtype,
                 **self.extra_kwargs,
             )
         )
-        torch.cuda.synchronize()
         load_time = time.time() - start
 
-        ModelLoadTimeMetric.update(load_time, self.model_key, "disk")
-
-        self._verify_device_placement(model._module, "disk")
+        ModelLoadTimeMetric.update(load_time, self.model_key, "disk_cpu_load")
 
         self.logger.info(
-            f"Model loaded from disk in {load_time} seconds"
+            f"Model loaded from disk to CPU in {load_time:.2f}s"
         )
 
         return model
+
+    def dispatch_to_gpu(self):
+        """Move model from CPU to target GPUs. Called by controller after evictions complete."""
+        start = time.time()
+        torch.cuda.synchronize()
+        self.logger.info(
+            f"Dispatching model to GPUs {self.target_gpus}..."
+        )
+
+        max_memory = self._build_max_memory()
+        module = self.model._module
+
+        if len(self.target_gpus) == 1:
+            # Single-GPU fast path
+            target_device = torch.device(f"cuda:{self.target_gpus[0]}")
+            remove_accelerate_hooks(module)
+            for param in module.parameters():
+                param.data = param.data.to(target_device, non_blocking=True)
+            for buf in module.buffers():
+                buf.data = buf.data.to(target_device, non_blocking=True)
+            torch.cuda.synchronize()
+            module.hf_device_map = {
+                name: str(self.target_gpus[0])
+                for name, _ in module.named_modules()
+            }
+        else:
+            # Multi-GPU: use accelerate dispatch_model
+            remove_accelerate_hooks(module)
+            device_map = _get_device_map(module, "auto", max_memory, None)
+            self.model._module = dispatch_model(module, device_map)
+            torch.cuda.synchronize()
+
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        dispatch_time = time.time() - start
+        ModelLoadTimeMetric.update(dispatch_time, self.model_key, "disk_gpu_dispatch")
+
+        self._verify_device_placement(self.model._module, "disk")
+
+        self.logger.info(
+            f"Model dispatched to GPUs in {dispatch_time:.2f}s"
+        )
+
+        # Pre-allocate pinned CPU buffers now that GPU placement is known
+        self._start_pinned_preallocation()
 
     async def to_cache(self):
         self.logger.info(f"Saving model to cache for model key {self.model_key}...")
