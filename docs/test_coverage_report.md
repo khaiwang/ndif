@@ -4,17 +4,17 @@
 
 | Layer | Tests | Source modules covered |
 |-------|------:|----------------------|
-| Unit | 540 | 13 source modules |
+| Unit | 570 | 14 source modules |
 | Component | 19 | 2 integration paths |
 | Contract | 16 | 2 service boundaries |
 | Integration | ~81 | Remote nnsight + security guards |
-| **Total** | **~656** | |
+| **Total** | **~686** | |
 
 ---
 
 ## What Is Tested
 
-### Unit Tests (540 tests across 13 files)
+### Unit Tests (570 tests across 14 files)
 
 | Test file | Tests | Source file | Coverage |
 |-----------|------:|-----------|----------|
@@ -27,6 +27,7 @@
 | `test_processor_workers.py` | 35 | `api/.../queue/processor.py` | **Thorough.** processor_worker() lifecycle, reply_worker() status updates, _replica_worker() dequeue-execute loop, _execute_on_replica() submit/timeout/response, _initialize_and_start_replica() wait-until-ready. |
 | `test_request_parsing.py` | 34 | `common/schema/request.py`, `api/.../dependencies.py` | **Good.** from_request() deserialization (multipart body, session_id, callback, hotswapping, model_key), validate_request() full pipeline integration. |
 | `test_config.py` | 33 | `api/.../config.py`, `api/.../queue/config.py` | **Thorough.** AppConfig/QueueConfig from_env() parsing, _parse_positive_int() validation, default values, invalid/missing env var handling. |
+| `test_object_storage.py` | 30 | `common/schema/mixins.py` | **Thorough.** ObjectStorageMixin (object_name, url, _save/_load, save JSON/PyTorch paths, load with streaming, delete), TensorStoragePickler (GPU→CPU, CPU passthrough, non-tensor), cpu_pickle_module, TelemetryMixin (all log levels). |
 | `test_deployment.py` | 29 | `ray/.../cluster/deployment.py` | **Thorough.** DeploymentLevel enum, construction, properties (name, actor, gpus), get_state() serialization, end_time() calculation, delete/restart (with error handling), cache/from_cache (with error handling), create() with Ray options, env vars, provider integration. |
 | `test_dispatcher_workers.py` | 28 | `api/.../queue/dispatcher.py` | **Good.** dispatch_worker() Redis BRPOP→deserialize→dispatch loop, status_worker() periodic cluster status push, events_worker() Redis stream read→event routing, error handling and recovery within each loop. |
 | `test_dependencies.py` | 20 | `api/.../dependencies.py` | **Good.** authenticate_api_key (dev mode, valid, invalid, missing), validate_python_version, validate_nnsight_version, check_hotswapping_access, require_ray_connection. |
@@ -59,20 +60,7 @@
 
 ### Priority 1 — High-value gaps with moderate effort
 
-#### 1. `ObjectStorageMixin` — S3 Object Storage
-**Source:** `src/common/schema/mixins.py`
-**Risk:** All request/response persistence goes through this mixin.
-**Missing:**
-- `save()` / `load()` round-trip with mocked boto3
-- `load(stream=True)` streaming path
-- `delete()` cleanup
-- `url()` presigned URL generation
-- `_save()` / `_load()` error handling (S3 connection failures)
-- `TensorStoragePickler` custom pickle behavior for GPU tensors
-
-### Priority 2 — Important but lower immediate risk
-
-#### 2. `BaseModelDeployment` — Model Execution Pipeline
+#### 1. `BaseModelDeployment` — Model Execution Pipeline
 **Source:** `src/services/ray/src/ray/deployments/modeling/base.py`
 **Risk:** Core inference execution. Requires heavy mocking of torch/accelerate.
 **Missing:**
@@ -87,7 +75,7 @@
 - `_build_max_memory()` device map construction
 - `_verify_device_placement()` GPU placement validation
 
-#### 3. Provider Classes — Connection Management
+#### 2. Provider Classes — Connection Management
 **Source:** `src/common/providers/` (redis.py, ray.py, objectstore.py, socketio.py, mailgun.py)
 **Risk:** Provider bugs cause silent failures or connection leaks.
 **Missing:**
@@ -97,7 +85,7 @@
 - `SioProvider`: connect(), disconnect(), connected(), call(), emit()
 - `MailgunProvider`: connected(), send_email()
 
-#### 4. `AccountsDB` — Database Access
+#### 3. `AccountsDB` — Database Access
 **Source:** `src/services/api/src/db.py`
 **Risk:** Authentication and authorization decisions depend on this.
 **Missing:**
@@ -106,9 +94,9 @@
 - `tier_id_from_name()` mapping
 - Connection failure handling
 
-### Priority 3 — Nice to have
+### Priority 2 — Nice to have
 
-#### 5. `ModelEvaluator` — Model Size Estimation
+#### 4. `ModelEvaluator` — Model Size Estimation
 **Source:** `src/services/ray/src/ray/deployments/controller/cluster/evaluator.py`
 **Risk:** Incorrect size estimates affect deployment decisions.
 **Missing:**
@@ -116,7 +104,7 @@
 - `CacheEntry` storage
 - Error handling for unknown models
 
-#### 6. Metrics Classes
+#### 5. Metrics Classes
 **Source:** `src/common/metrics/` (6 metric classes)
 **Risk:** Low — metrics are observability, not control flow.
 **Missing:**
@@ -127,7 +115,7 @@
 - `RequestStatusTimeMetric.update()`
 - `NetworkStatusMetric.update()`
 
-#### 7. Logging Infrastructure
+#### 6. Logging Infrastructure
 **Source:** `src/common/logging/logger.py`
 **Risk:** Low — structured logging utilities.
 **Missing:**
@@ -135,7 +123,7 @@
 - `RetryingLokiHandler.emit()` retry logic
 - `set_logger()` configuration
 
-#### 8. Security / Protected Environment
+#### 7. Security / Protected Environment
 **Source:** `src/services/ray/src/ray/nn/security/`
 **Risk:** Already well-tested in integration tests (`test_security_guards.py`). Unit tests for internal mechanics could add confidence.
 **Missing (unit-level):**
@@ -145,14 +133,14 @@
 - `ProtectedModule` attribute restrictions
 - `ProtectedObject` runtime wrapping
 
-#### 9. Google Calendar Scheduler
+#### 8. Google Calendar Scheduler
 **Source:** `src/services/ray/src/ray/deployments/controller/gcal/`
 **Risk:** Low — optional scheduling feature.
 **Missing:**
 - `SchedulingActor.check_calendar()` event parsing
 - `SchedulingControllerActor` scheduled deployment
 
-#### 10. Utility Functions
+#### 9. Utility Functions
 **Source:** `src/services/api/src/queue/util.py`, `src/services/ray/src/ray/deployments/modeling/util.py`
 **Missing:**
 - `patch()` Ray deadlock workaround
@@ -181,7 +169,7 @@
 | `schema/response.py` | Partial | — | — | — | **Moderate** |
 | `api/app.py` | — | Partial | — | — | **Moderate** |
 | `nn/security/*` | — | — | — | Full | **Good** (integration only) |
-| `schema/mixins.py` | — | — | — | — | **None** |
+| `schema/mixins.py` | Full | — | — | — | **Strong** |
 | `modeling/base.py` | — | — | Interface | — | **Weak** |
 | `cluster/evaluator.py` | — | — | — | — | **None** |
 | `providers/*` | — | — | — | — | **None** |
@@ -195,9 +183,9 @@
 ## Recommended Next Steps
 
 **If you have time for 3 things:**
-1. **ObjectStorageMixin save/load** — every request/response depends on it, zero coverage
-2. **BaseModelDeployment** — core inference execution pipeline, requires heavy torch mocking
-3. **Provider classes** — connection management for Redis, Ray, ObjectStore, Sio, Mailgun
+1. **BaseModelDeployment** — core inference execution pipeline, requires heavy torch mocking
+2. **Provider classes** — connection management for Redis, Ray, ObjectStore, Sio, Mailgun
+3. **AccountsDB** — authentication/authorization with mocked psycopg2
 
 **If you have time for 1 thing:**
-1. **ObjectStorageMixin** — it's the persistence layer for all requests/responses and currently has zero test coverage
+1. **BaseModelDeployment** — it's the core inference execution pipeline and currently has only interface-level contract coverage

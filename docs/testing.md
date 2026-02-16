@@ -4,11 +4,11 @@
 
 NDIF uses a layered testing strategy that allows thorough verification of individual components without requiring the full distributed stack (Ray, Redis, MinIO, PostgreSQL) to be running. The framework consists of four test layers, three of which run entirely offline.
 
-**575 tests run in ~2.4 seconds with zero external dependencies.**
+**605 tests run in ~2.5 seconds with zero external dependencies.**
 
 | Layer | Tests | Directory | What it verifies |
 |-------|------:|-----------|------------------|
-| Unit | 540 | `tests/unit/` | Pure logic of individual classes and functions |
+| Unit | 570 | `tests/unit/` | Pure logic of individual classes and functions |
 | Component | 19 | `tests/component/` | Service-internal wiring with mocked boundaries |
 | Contract | 16 | `tests/contract/` | Message format compatibility across API and Ray |
 | Integration | — | `tests/` (root) | End-to-end against a running NDIF stack |
@@ -44,7 +44,7 @@ Markers are auto-applied based on directory — no need to decorate individual t
 
 ## Test Layers
 
-### Unit Tests (540 tests)
+### Unit Tests (570 tests)
 
 Test individual classes with all external dependencies mocked. No Redis, Ray, or network calls.
 
@@ -59,6 +59,7 @@ Test individual classes with all external dependencies mocked. No Redis, Ray, or
 | `test_processor_workers.py` | 35 | `Processor` worker loops — processor_worker, reply_worker, replica_worker, execute_on_replica |
 | `test_request_parsing.py` | 34 | `BackendRequestModel.from_request()`, `validate_request()` — deserialization, validation pipeline |
 | `test_config.py` | 33 | `AppConfig`, `QueueConfig` — from_env() parsing, validation, defaults |
+| `test_object_storage.py` | 30 | `ObjectStorageMixin` (save/load/delete/url), `TensorStoragePickler` (GPU→CPU), `TelemetryMixin` |
 | `test_deployment.py` | 29 | `Deployment` actor lifecycle — create, delete, restart, cache, from_cache, get_state |
 | `test_dispatcher_workers.py` | 28 | `Dispatcher` worker loops — dispatch_worker, status_worker, events_worker |
 | `test_dependencies.py` | 20 | API dependency validators — auth, Python/nnsight version checks, Ray connection |
