@@ -19,12 +19,18 @@ from nnsight.modeling.mixins import RemoteableMixin
 from nnsight.modeling.mixins.remoteable import StreamTracer
 from nnsight.schema.request import RequestModel
 
+from opentelemetry import trace
+
 from ....logging import set_logger
 from ....metrics import (
-    ExecutionTimeMetric,
     GPUMemMetric,
-    ModelLoadTimeMetric,
     RequestResponseSizeMetric,
+)
+from ....tracing import (
+    TracingContext,
+    init_tracing,
+    set_request_attributes,
+    trace_span,
 )
 from ....providers.objectstore import ObjectStoreProvider
 from ....providers.socketio import SioProvider
@@ -52,92 +58,103 @@ class BaseModelDeployment:
         target_gpus: List[int] | None = None,
         spawn_timestamp: float | None = None,
         *args,
+        trace_context: Optional[Dict[str, str]] = None,
         extra_kwargs: Dict[str, Any] = {},
         **kwargs,
     ) -> None:
         super().__init__()
         init_start = time.time()
 
-        provider_start = time.time()
-        ObjectStoreProvider.connect()
-        SioProvider.connect()
-        provider_time = time.time() - provider_start
+        init_tracing("ndif-ray")
 
-        self.model_key = model_key
-        self.execution_timeout = execution_timeout
-        self.dispatch = dispatch
-        self.dtype = dtype
-        self.extra_kwargs = extra_kwargs
-        self.target_gpus = target_gpus or []
+        parent_ctx = TracingContext.extract(trace_context)
 
-        self.cached = False
+        with trace_span(
+            "model_actor.init",
+            parent_context=parent_ctx,
+            attributes={
+                "ndif.model.key": model_key,
+                "ndif.model.target_gpus": str(target_gpus or []),
+                "ndif.model.dispatch": dispatch,
+                "ndif.model.dtype": str(dtype),
+            },
+        ) as span:
+            self._init_trace_context = trace_context
 
-        self.logger = set_logger(model_key)
+            span.add_event("connecting_providers")
+            ObjectStoreProvider.connect()
+            SioProvider.connect()
 
-        self.runtime_context = ray.get_runtime_context()
+            self.model_key = model_key
+            self.execution_timeout = execution_timeout
+            self.dispatch = dispatch
+            self.dtype = dtype
+            self.extra_kwargs = extra_kwargs
+            self.target_gpus = target_gpus or []
 
-        if isinstance(dtype, str):
-            dtype = getattr(torch, dtype)
+            self.cached = False
 
-        torch.set_default_dtype(torch.bfloat16)
+            self.logger = set_logger(model_key)
 
-        # Set the default CUDA device to the first target GPU BEFORE any CUDA
-        # call. This ensures the CUDA context (~400MiB) is created on the
-        # target GPU rather than always landing on GPU 0.
-        cuda_init_start = time.time()
-        if self.target_gpus:
-            torch.cuda.set_device(self.target_gpus[0])
-        cuda_init_time = time.time() - cuda_init_start
+            span.add_event("getting_ray_runtime_context")
+            self.runtime_context = ray.get_runtime_context()
 
-        # Use cudaHostRegister allocator for pin_memory=True. This avoids
-        # power-of-2 rounding and enables multi-threaded page registration.
-        try:
-            torch.cuda.memory._set_allocator_settings(
-                "pinned_use_cuda_host_register:True,pinned_num_register_threads:8"
+            if isinstance(dtype, str):
+                dtype = getattr(torch, dtype)
+
+            torch.set_default_dtype(torch.bfloat16)
+
+            # Set the default CUDA device to the first target GPU BEFORE any CUDA
+            # call. This ensures the CUDA context (~400MiB) is created on the
+            # target GPU rather than always landing on GPU 0.
+            if self.target_gpus:
+                torch.cuda.set_device(self.target_gpus[0])
+
+            # Use cudaHostRegister allocator for pin_memory=True. This avoids
+            # power-of-2 rounding and enables multi-threaded page registration.
+            try:
+                torch.cuda.memory._set_allocator_settings(
+                    "pinned_use_cuda_host_register:True,pinned_num_register_threads:8"
+                )
+            except Exception:
+                self.logger.warning(
+                    "cudaHostRegister allocator not available, using default"
+                )
+
+            span.add_event("loading_model")
+            self.model = self.load_from_disk()
+
+            span.add_event("building_persistent_objects")
+            self.persistent_objects = self.model._remoteable_persistent_objects()
+
+            for key, value in self.persistent_objects.items():
+                if isinstance(value, torch.nn.Module):
+                    self.persistent_objects[key] = protect(value)
+
+            self.execution_protector = Protector(WHITELISTED_MODULES, builtins=True)
+
+            if dispatch:
+                self.model._module.requires_grad_(False)
+
+            torch.cuda.empty_cache()
+
+            self.request: BackendRequestModel
+
+            self.thread_pool = ThreadPoolExecutor(max_workers=1)
+
+            self.kill_switch = asyncio.Event()
+            self.execution_ident = None
+
+            StreamTracer.register(self.stream_send, self.stream_receive)
+
+            init_time = time.time() - init_start
+            ray_overhead = init_start - spawn_timestamp if spawn_timestamp else 0.0
+            span.set_attribute("ndif.model.init_time_s", init_time)
+            span.set_attribute("ndif.model.ray_overhead_s", ray_overhead)
+            self.logger.info(
+                f"ModelActor.__init__ completed (CPU) in {init_time:.2f}s "
+                f"(ray_overhead={ray_overhead:.2f}s)"
             )
-        except Exception:
-            self.logger.warning(
-                "cudaHostRegister allocator not available, using default"
-            )
-
-        self.model = self.load_from_disk()
-
-        security_start = time.time()
-        self.persistent_objects = self.model._remoteable_persistent_objects()
-
-        for key, value in self.persistent_objects.items():
-            if isinstance(value, torch.nn.Module):
-                self.persistent_objects[key] = protect(value)
-
-        self.execution_protector = Protector(WHITELISTED_MODULES, builtins=True)
-
-        if dispatch:
-            self.model._module.requires_grad_(False)
-
-        security_time = time.time() - security_start
-
-        self.request: BackendRequestModel
-
-        self.thread_pool = ThreadPoolExecutor(max_workers=1)
-
-        self.kill_switch = asyncio.Event()
-        self.execution_ident = None
-
-        StreamTracer.register(self.stream_send, self.stream_receive)
-
-        init_time = time.time() - init_start
-        ray_overhead = init_start - spawn_timestamp if spawn_timestamp else 0.0
-        ModelLoadTimeMetric.update(ray_overhead, self.model_key, "ray_actor_overhead")
-        ModelLoadTimeMetric.update(provider_time, self.model_key, "init_provider_connect")
-        ModelLoadTimeMetric.update(cuda_init_time, self.model_key, "init_cuda_context")
-        ModelLoadTimeMetric.update(security_time, self.model_key, "init_security_setup")
-        ModelLoadTimeMetric.update(init_time, self.model_key, "init_cpu_total")
-        self.logger.info(
-            f"ModelActor.__init__ completed (CPU) in {init_time:.2f}s "
-            f"(ray_overhead={ray_overhead:.2f}s, provider={provider_time:.2f}s, "
-            f"cuda_init={cuda_init_time:.2f}s, "
-            f"load_from_disk=see 'disk_cpu_load' metric, security={security_time:.2f}s)"
-        )
 
         # Pinned pool is allocated after dispatch_to_gpu() when GPU placement is known.
         self._pinned_pool: PinnedBufferPool | None = None
@@ -173,9 +190,7 @@ class BaseModelDeployment:
         for param in module.parameters():
             devices.add(f"{param.device.type}:{param.device.index}")
 
-        self.logger.info(
-            f"Model loaded from {source} on devices: {devices}"
-        )
+        self.logger.info(f"Model loaded from {source} on devices: {devices}")
 
         if self.target_gpus:
             expected = {f"cuda:{gpu}" for gpu in self.target_gpus}
@@ -196,7 +211,11 @@ class BaseModelDeployment:
                 evict/reload cycles where the model architecture hasn't changed.
         """
         try:
-            if reuse_ok and self._pinned_pool is not None and self._pinned_pool.is_ready:
+            if (
+                reuse_ok
+                and self._pinned_pool is not None
+                and self._pinned_pool.is_ready
+            ):
                 if self._pinned_pool.matches(self.model._module):
                     self.logger.info("Reusing existing pinned buffer pool")
                     return
@@ -213,139 +232,148 @@ class BaseModelDeployment:
             self._pinned_pool = None
 
     def load_from_disk(self):
-        start = time.time()
-        self.logger.info(
-            f"Loading model from disk (CPU) for model key {self.model_key} "
-            f"targeting GPUs {self.target_gpus}..."
-        )
-
-        model = load_with_cache_deletion_retry(
-            lambda: RemoteableMixin.from_model_key(
-                self.model_key,
-                device_map="cpu",
-                dispatch=self.dispatch,
-                torch_dtype=self.dtype,
-                **self.extra_kwargs,
+        parent_ctx = TracingContext.extract(self._init_trace_context)
+        with trace_span(
+            "model_actor.load",
+            parent_context=parent_ctx,
+            attributes={
+                "ndif.model.key": self.model_key,
+                "ndif.model.load_source": "disk",
+            },
+        ) as span:
+            start = time.time()
+            self.logger.info(
+                f"Loading model from disk (CPU) for model key {self.model_key} "
+                f"targeting GPUs {self.target_gpus}..."
             )
-        )
-        load_time = time.time() - start
 
-        ModelLoadTimeMetric.update(load_time, self.model_key, "disk_cpu_load")
+            model = load_with_cache_deletion_retry(
+                lambda: RemoteableMixin.from_model_key(
+                    self.model_key,
+                    device_map="cpu",
+                    dispatch=self.dispatch,
+                    torch_dtype=self.dtype,
+                    **self.extra_kwargs,
+                )
+            )
+            load_time = time.time() - start
 
-        self.logger.info(
-            f"Model loaded from disk to CPU in {load_time:.2f}s"
-        )
+            span.set_attribute("ndif.model.load_time_s", load_time)
 
-        return model
+            self._verify_device_placement(model._module, "disk")
+
+            self.logger.info(f"Model loaded from disk to CPU in {load_time:.2f}s")
+
+            return model
 
     def dispatch_to_gpu(self):
         """Move model from CPU to target GPUs. Called by controller after evictions complete."""
-        start = time.time()
-        torch.cuda.synchronize()
-        self.logger.info(
-            f"Dispatching model to GPUs {self.target_gpus}..."
-        )
-
-        max_memory = self._build_max_memory()
-        module = self.model._module
-
-        if len(self.target_gpus) == 1:
-            # Single-GPU fast path with multi-stream dispatch to overlap
-            # CUDA API/driver overhead across streams.
-            target_device = torch.device(f"cuda:{self.target_gpus[0]}")
-            remove_accelerate_hooks(module)
-            num_streams = 4
-            streams = [torch.cuda.Stream(device=target_device) for _ in range(num_streams)]
-            all_tensors = list(module.parameters()) + list(module.buffers())
-            for i, tensor in enumerate(all_tensors):
-                with torch.cuda.stream(streams[i % num_streams]):
-                    tensor.data = tensor.data.to(target_device, non_blocking=True)
+        with trace_span(
+            "model_actor.dispatch_to_gpu",
+            attributes={
+                "ndif.model.key": self.model_key,
+                "ndif.model.target_gpus": str(self.target_gpus),
+            },
+        ) as span:
+            start = time.time()
             torch.cuda.synchronize()
-            module.hf_device_map = {
-                name: str(self.target_gpus[0])
-                for name, _ in module.named_modules()
-            }
-        else:
-            # Multi-GPU: use accelerate dispatch_model
-            remove_accelerate_hooks(module)
-            device_map = _get_device_map(module, "auto", max_memory, None)
-            self.model._module = dispatch_model(module, device_map)
-            torch.cuda.synchronize()
+            self.logger.info(f"Dispatching model to GPUs {self.target_gpus}...")
 
-        gc.collect()
-        torch.cuda.empty_cache()
-
-        dispatch_time = time.time() - start
-        ModelLoadTimeMetric.update(dispatch_time, self.model_key, "disk_gpu_dispatch")
-
-        self._verify_device_placement(self.model._module, "disk")
-
-        self.logger.info(
-            f"Model dispatched to GPUs in {dispatch_time:.2f}s"
-        )
-
-        # Pre-allocate pinned CPU buffers now that GPU placement is known
-        self._start_pinned_preallocation()
-
-    async def to_cache(self):
-        self.logger.info(f"Saving model to cache for model key {self.model_key}...")
-        cache_start = time.time()
-
-        cancel_start = time.time()
-        await self.cancel()
-        cancel_time = time.time() - cancel_start
-
-        hook_start = time.time()
-        remove_accelerate_hooks(self.model._module)
-        hook_time = time.time() - hook_start
-
-        transfer_start = time.time()
-        used_pinned = False
-        pool = self._pinned_pool
-
-        if pool is not None and pool.wait_ready(timeout=120.0):
-            # Pinned-memory fast path: DMA copies into pre-allocated buffers.
+            max_memory = self._build_max_memory()
             module = self.model._module
-            for name, tensor in unique_named_tensors(module):
-                pinned_buf = pool.get(name)
-                if pinned_buf is not None:
-                    pinned_buf.copy_(tensor.data, non_blocking=True)
-                    tensor.data = pinned_buf
-                elif tensor.device.type != "cpu":
-                    tensor.data = tensor.data.cpu()
-            torch.cuda.synchronize()
-            used_pinned = True
-            self.logger.info("to_cache: used pinned memory path")
-        else:
-            # Fallback: standard unpinned transfer.
-            self.model._module = self.model._module.cpu()
-            torch.cuda.synchronize()
-            self.logger.info("to_cache: used fallback unpinned path")
 
-        transfer_time = time.time() - transfer_start
+            if len(self.target_gpus) == 1:
+                # Single-GPU fast path with multi-stream dispatch to overlap
+                # CUDA API/driver overhead across streams.
+                target_device = torch.device(f"cuda:{self.target_gpus[0]}")
+                remove_accelerate_hooks(module)
+                num_streams = 4
+                streams = [
+                    torch.cuda.Stream(device=target_device) for _ in range(num_streams)
+                ]
+                all_tensors = list(module.parameters()) + list(module.buffers())
+                for i, tensor in enumerate(all_tensors):
+                    with torch.cuda.stream(streams[i % num_streams]):
+                        tensor.data = tensor.data.to(target_device, non_blocking=True)
+                torch.cuda.synchronize()
+                module.hf_device_map = {
+                    name: str(self.target_gpus[0]) for name, _ in module.named_modules()
+                }
+            else:
+                # Multi-GPU: use accelerate dispatch_model
+                remove_accelerate_hooks(module)
+                device_map = _get_device_map(module, "auto", max_memory, None)
+                self.model._module = dispatch_model(module, device_map)
+                torch.cuda.synchronize()
 
-        cleanup_start = time.time()
-        gc.collect()
-        torch.cuda.empty_cache()
-        cleanup_time = time.time() - cleanup_start
+            gc.collect()
+            torch.cuda.empty_cache()
 
-        self.cached = True
+            dispatch_time = time.time() - start
+            span.set_attribute("ndif.model.dispatch_time_s", dispatch_time)
 
-        cache_time = time.time() - cache_start
-        ModelLoadTimeMetric.update(transfer_time, self.model_key, "to_cache_gpu_to_cpu")
-        ModelLoadTimeMetric.update(cleanup_time, self.model_key, "to_cache_cleanup")
-        ModelLoadTimeMetric.update(cache_time, self.model_key, "to_cache_total")
-        ModelLoadTimeMetric.update(
-            1.0 if used_pinned else 0.0, self.model_key, "to_cache_pinned"
-        )
-        self.logger.info(
-            f"Model cached in {cache_time:.2f}s "
-            f"(cancel={cancel_time:.2f}s, hooks={hook_time:.2f}s, "
-            f"gpu_to_cpu={transfer_time:.2f}s, cleanup={cleanup_time:.2f}s, "
-            f"pinned={used_pinned})"
-        )
+            self._verify_device_placement(self.model._module, "disk")
 
-    def from_cache(self, target_gpus: List[int]):
+            self.logger.info(f"Model dispatched to GPUs in {dispatch_time:.2f}s")
+
+            # Pre-allocate pinned CPU buffers now that GPU placement is known
+            self._start_pinned_preallocation()
+
+    async def to_cache(self, trace_context: Optional[Dict[str, str]] = None):
+        parent_ctx = TracingContext.extract(trace_context)
+        with trace_span(
+            "model_actor.to_cache",
+            parent_context=parent_ctx,
+            attributes={"ndif.model.key": self.model_key},
+        ) as span:
+            self.logger.info(f"Saving model to cache for model key {self.model_key}...")
+            cache_start = time.time()
+
+            span.add_event("cancelling")
+            await self.cancel()
+
+            span.add_event("remove_accelerate_hooks")
+            remove_accelerate_hooks(self.model._module)
+
+            span.add_event("move_to_cpu")
+            used_pinned = False
+            pool = self._pinned_pool
+
+            if pool is not None and pool.wait_ready(timeout=120.0):
+                # Pinned-memory fast path: DMA copies into pre-allocated buffers.
+                module = self.model._module
+                for name, tensor in unique_named_tensors(module):
+                    pinned_buf = pool.get(name)
+                    if pinned_buf is not None:
+                        pinned_buf.copy_(tensor.data, non_blocking=True)
+                        tensor.data = pinned_buf
+                    elif tensor.device.type != "cpu":
+                        tensor.data = tensor.data.cpu()
+                torch.cuda.synchronize()
+                used_pinned = True
+                self.logger.info("to_cache: used pinned memory path")
+            else:
+                # Fallback: standard unpinned transfer.
+                self.model._module = self.model._module.cpu()
+                torch.cuda.synchronize()
+                self.logger.info("to_cache: used fallback unpinned path")
+
+            span.add_event("gc_collect")
+            gc.collect()
+            torch.cuda.empty_cache()
+
+            self.cached = True
+
+            cache_time = time.time() - cache_start
+            span.set_attribute("ndif.model.to_cache_time_s", cache_time)
+            span.set_attribute("ndif.model.to_cache_pinned", used_pinned)
+            self.logger.info(
+                f"Model cached in {cache_time:.2f}s (pinned={used_pinned})"
+            )
+
+    def from_cache(
+        self, target_gpus: List[int], trace_context: Optional[Dict[str, str]] = None
+    ):
         """Restore model from CPU cache onto the specified GPU(s).
 
         Uses max_memory targeting to ensure the model is placed on exactly
@@ -354,105 +382,94 @@ class BaseModelDeployment:
 
         Args:
             target_gpus: List of physical GPU indices to place the model on.
+            trace_context: Optional trace context for distributed tracing.
         """
-        self.target_gpus = target_gpus
+        parent_ctx = TracingContext.extract(trace_context)
+        with trace_span(
+            "model_actor.load",
+            parent_context=parent_ctx,
+            attributes={
+                "ndif.model.key": self.model_key,
+                "ndif.model.load_source": "cache",
+            },
+        ) as span:
+            self.target_gpus = target_gpus
 
-        # Switch default CUDA device to the new target GPU before any CUDA ops
-        if self.target_gpus:
-            torch.cuda.set_device(self.target_gpus[0])
+            # Switch default CUDA device to the new target GPU before any CUDA ops
+            if self.target_gpus:
+                torch.cuda.set_device(self.target_gpus[0])
 
-        torch.cuda.synchronize()
-        start = time.time()
-
-        self.logger.info(
-            f"Loading model from cache for model key {self.model_key} "
-            f"onto GPUs {target_gpus}..."
-        )
-
-        max_memory = self._build_max_memory()
-        module = self.model._module
-
-        # Decide whether to use the single-GPU pinned fast path.
-        use_fast_path = (
-            len(self.target_gpus) == 1
-            and self._pinned_pool is not None
-            and self._pinned_pool.is_ready
-        )
-
-        if use_fast_path:
-            # Single-GPU fast path: bulk-transfer pinned chunks instead of
-            # individual parameters (~8 chunk .to() calls vs ~200 param calls).
-            self.logger.info("from_cache: single-GPU fast path (pinned, chunk bulk)")
-            target_device = torch.device(f"cuda:{self.target_gpus[0]}")
-
-            hook_start = time.time()
-            remove_accelerate_hooks(module)
-            hook_time = time.time() - hook_start
-
-            dispatch_start = time.time()
-            gpu_views = self._pinned_pool.transfer_to_device(target_device)
             torch.cuda.synchronize()
+            start = time.time()
 
-            # Reassign param.data / buf.data to the GPU-side views.
-            for name, param in module.named_parameters():
-                if name in gpu_views:
-                    param.data = gpu_views[name]
-            for name, buf in module.named_buffers():
-                if name in gpu_views:
-                    buf.data = gpu_views[name]
-                elif buf.device.type != "cuda":
-                    buf.data = buf.data.to(target_device, non_blocking=True)
-            torch.cuda.synchronize()
-            dispatch_time = time.time() - dispatch_start
+            self.logger.info(
+                f"Loading model from cache for model key {self.model_key} "
+                f"onto GPUs {target_gpus}..."
+            )
 
-            # Set hf_device_map to match what dispatch_model would produce.
-            module.hf_device_map = {
-                name: str(self.target_gpus[0])
-                for name, _ in module.named_modules()
-            }
-            device_map_time = 0.0
-        else:
-            # Multi-GPU or unpinned: use dispatch_model for cross-device hooks.
-            self.logger.info("from_cache: multi-GPU/unpinned path")
+            max_memory = self._build_max_memory()
+            module = self.model._module
 
-            device_map_start = time.time()
-            device_map = _get_device_map(module, "auto", max_memory, None)
-            device_map_time = time.time() - device_map_start
+            # Decide whether to use the single-GPU pinned fast path.
+            use_fast_path = (
+                len(self.target_gpus) == 1
+                and self._pinned_pool is not None
+                and self._pinned_pool.is_ready
+            )
 
-            hook_start = time.time()
-            remove_accelerate_hooks(module)
-            hook_time = time.time() - hook_start
+            if use_fast_path:
+                # Single-GPU fast path: bulk-transfer pinned chunks instead of
+                # individual parameters (~8 chunk .to() calls vs ~200 param calls).
+                span.add_event("from_cache_fast_path")
+                self.logger.info(
+                    "from_cache: single-GPU fast path (pinned, chunk bulk)"
+                )
+                target_device = torch.device(f"cuda:{self.target_gpus[0]}")
 
-            dispatch_start = time.time()
-            self.model._module = dispatch_model(module, device_map)
-            torch.cuda.synchronize()
-            dispatch_time = time.time() - dispatch_start
+                remove_accelerate_hooks(module)
 
-        cleanup_start = time.time()
-        gc.collect()
-        torch.cuda.empty_cache()
-        cleanup_time = time.time() - cleanup_start
+                gpu_views = self._pinned_pool.transfer_to_device(target_device)
+                torch.cuda.synchronize()
 
-        load_time = time.time() - start
+                # Reassign param.data / buf.data to the GPU-side views.
+                for name, param in module.named_parameters():
+                    if name in gpu_views:
+                        param.data = gpu_views[name]
+                for name, buf in module.named_buffers():
+                    if name in gpu_views:
+                        buf.data = gpu_views[name]
+                    elif buf.device.type != "cuda":
+                        buf.data = buf.data.to(target_device, non_blocking=True)
+                torch.cuda.synchronize()
 
-        self._verify_device_placement(self.model._module, "cache")
+                # Set hf_device_map to match what dispatch_model would produce.
+                module.hf_device_map = {
+                    name: str(self.target_gpus[0]) for name, _ in module.named_modules()
+                }
+            else:
+                # Multi-GPU or unpinned: use dispatch_model for cross-device hooks.
+                span.add_event("from_cache_dispatch_model")
+                self.logger.info("from_cache: multi-GPU/unpinned path")
 
-        ModelLoadTimeMetric.update(device_map_time, self.model_key, "from_cache_device_map")
-        ModelLoadTimeMetric.update(dispatch_time, self.model_key, "from_cache_cpu_to_gpu")
-        ModelLoadTimeMetric.update(cleanup_time, self.model_key, "from_cache_cleanup")
-        ModelLoadTimeMetric.update(load_time, self.model_key, "cache")
-        ModelLoadTimeMetric.update(
-            1.0 if use_fast_path else 0.0, self.model_key, "from_cache_fast_path"
-        )
+                device_map = _get_device_map(module, "auto", max_memory, None)
+                remove_accelerate_hooks(module)
+                self.model._module = dispatch_model(module, device_map)
+                torch.cuda.synchronize()
 
-        self.logger.info(
-            f"Model loaded from cache in {load_time:.2f}s "
-            f"(device_map={device_map_time:.2f}s, hooks={hook_time:.2f}s, "
-            f"cpu_to_gpu={dispatch_time:.2f}s, cleanup={cleanup_time:.2f}s, "
-            f"fast_path={use_fast_path})"
-        )
+            gc.collect()
+            torch.cuda.empty_cache()
 
-        self.cached = False
+            load_time = time.time() - start
+
+            self._verify_device_placement(self.model._module, "cache")
+
+            span.set_attribute("ndif.model.load_time_s", load_time)
+            span.set_attribute("ndif.model.from_cache_fast_path", use_fast_path)
+            self.logger.info(
+                f"Model loaded from cache in {load_time:.2f}s (fast_path={use_fast_path})"
+            )
+
+            self.cached = False
 
         # Keep the existing pinned pool if its layout still matches (same model).
         self._start_pinned_preallocation(reuse_ok=True)
@@ -472,46 +489,54 @@ class BaseModelDeployment:
         if self.cached:
             raise LookupError("Failed to look up actor")
 
-        self.request = request
+        parent_ctx = TracingContext.extract(request.trace_context)
 
-        try:
-            result = None
+        with trace_span("model_actor.call", parent_context=parent_ctx) as span:
+            set_request_attributes(span, request)
+            self.request = request
 
-            inputs = self.pre()
+            try:
+                result = None
 
-            job_task = asyncio.create_task(asyncio.to_thread(self.execute, inputs))
-            kill_task = asyncio.create_task(self.kill_switch.wait())
+                inputs = self.pre()
 
-            done, pending = await asyncio.wait(
-                [job_task, kill_task],
-                timeout=self.execution_timeout,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
+                job_task = asyncio.create_task(asyncio.to_thread(self.execute, inputs))
+                kill_task = asyncio.create_task(self.kill_switch.wait())
 
-            for task in pending:
-                task.cancel()
-
-            if job_task in done:
-                result = await job_task
-            elif kill_task in done:
-                kill_thread(self.execution_ident)
-                raise Exception("Your job was cancelled or preempted by the server.")
-            else:
-                kill_thread(self.execution_ident)
-                raise Exception(
-                    f"Job took longer than timeout: {self.execution_timeout} seconds"
+                done, pending = await asyncio.wait(
+                    [job_task, kill_task],
+                    timeout=self.execution_timeout,
+                    return_when=asyncio.FIRST_COMPLETED,
                 )
 
-            self.post(result)
+                for task in pending:
+                    task.cancel()
 
-        except Exception as e:
-            self.exception(e)
+                if job_task in done:
+                    result = await job_task
+                elif kill_task in done:
+                    kill_thread(self.execution_ident)
+                    raise Exception(
+                        "Your job was cancelled or preempted by the server."
+                    )
+                else:
+                    kill_thread(self.execution_ident)
+                    raise Exception(
+                        f"Job took longer than timeout: {self.execution_timeout} seconds"
+                    )
 
-        finally:
-            del request
-            del result
+                self.post(result)
 
-            self.cleanup()
+            except Exception as e:
+                span.set_status(trace.StatusCode.ERROR, str(e))
+                span.record_exception(e)
+                self.exception(e)
+
+            finally:
+                del request
+                del result
+
+                self.cleanup()
 
     async def cancel(self):
         if self.execution_ident is not None:
@@ -524,17 +549,20 @@ class BaseModelDeployment:
     ### ABSTRACT METHODS #################################
 
     def pre(self) -> RequestModel:
-
-        self.respond(
-            status=BackendResponseModel.JobStatus.RUNNING,
-            description="Your job has started running.",
-        )
-
         """Logic to execute before execution."""
-        with Protector(WHITELISTED_MODULES_DESERIALIZATION):
-            request = self.request.deserialize(self.persistent_objects)
+        with trace_span(
+            "model_actor.pre", attributes={"ndif.model.key": self.model_key}
+        ) as span:
+            self.respond(
+                status=BackendResponseModel.JobStatus.RUNNING,
+                description="Your job has started running.",
+            )
 
-        return request
+            span.add_event("deserializing_request")
+            with Protector(WHITELISTED_MODULES_DESERIALIZATION):
+                request = self.request.deserialize(self.persistent_objects)
+
+            return request
 
     def execute(self, request: RequestModel) -> Any:
         """Execute request.
@@ -548,28 +576,34 @@ class BaseModelDeployment:
 
         self.execution_ident = threading.current_thread().ident
 
-        with autocast(device_type="cuda", dtype=torch.get_default_dtype()):
-            if torch.cuda.is_available():
-                reset_peak_memory_stats()
-                model_memory = memory_allocated()
+        with trace_span(
+            "model_actor.execute", attributes={"ndif.model.key": self.model_key}
+        ) as span:
+            with autocast(device_type="cuda", dtype=torch.get_default_dtype()):
+                if torch.cuda.is_available():
+                    reset_peak_memory_stats()
+                    model_memory = memory_allocated()
 
-            execution_time = time.time()
+                execution_time = time.time()
 
-            # Execute object.
-            with StdoutRedirect(self.log):
-                result = RemoteExecutionBackend(
-                    request.interventions, self.execution_protector
-                )(request.tracer)
+                # Execute object.
+                with StdoutRedirect(self.log):
+                    result = RemoteExecutionBackend(
+                        request.interventions, self.execution_protector
+                    )(request.tracer)
 
-            execution_time = time.time() - execution_time
+                execution_time = time.time() - execution_time
 
-            # Compute GPU memory usage
-            if torch.cuda.is_available():
-                gpu_mem = max_memory_allocated() - model_memory
-            else:
-                gpu_mem = 0
+                # Compute GPU memory usage
+                if torch.cuda.is_available():
+                    gpu_mem = max_memory_allocated() - model_memory
+                else:
+                    gpu_mem = 0
 
-        return result, gpu_mem, execution_time
+            span.set_attribute("ndif.execution_time_s", execution_time)
+            span.set_attribute("ndif.gpu_mem_bytes", gpu_mem)
+
+            return result, gpu_mem, execution_time
 
     def post(self, result: Any) -> None:
         """Logic to execute after execution with result from `.execute`.
@@ -578,25 +612,34 @@ class BaseModelDeployment:
             request (BackendRequestModel): Request.
             result (Any): Result.
         """
+        with trace_span(
+            "model_actor.post", attributes={"ndif.model.key": self.model_key}
+        ) as span:
+            saves = result[0]
+            gpu_mem: int = result[1]
+            execution_time_s: float = result[2]
 
-        saves = result[0]
-        gpu_mem: int = result[1]
-        execution_time_s: float = result[2]
+            span.add_event("saving_result")
+            result_object = BackendResultModel(
+                id=self.request.id,
+                **saves,
+            ).save(compress=self.request.compress)
 
-        result_object = BackendResultModel(
-            id=self.request.id,
-            **saves,
-        ).save(compress=self.request.compress)
+            span.set_attribute("ndif.response_size_bytes", result_object._size)
+            span.set_attribute("ndif.request.compress", self.request.compress)
 
-        self.respond(
-            status=BackendResponseModel.JobStatus.COMPLETED,
-            description="Your job has been completed.",
-            data=(result_object.url(), result_object._size),
-        )
+            span.add_event("sending_response")
+            self.respond(
+                status=BackendResponseModel.JobStatus.COMPLETED,
+                description="Your job has been completed.",
+                data=(result_object.url(), result_object._size),
+            )
 
-        RequestResponseSizeMetric.update(self.request, result_object._size)
-        GPUMemMetric.update(self.request, gpu_mem)
-        ExecutionTimeMetric.update(self.request, execution_time_s)
+            span.set_attribute("ndif.execution_time_s", execution_time_s)
+            span.set_attribute("ndif.gpu_mem_bytes", gpu_mem)
+
+            RequestResponseSizeMetric.update(self.request, result_object._size)
+            GPUMemMetric.update(self.request, gpu_mem)
 
     def exception(self, exception: Exception) -> None:
         """Handles exceptions that occur during model execution.
@@ -641,13 +684,21 @@ class BaseModelDeployment:
         This cleanup is important for preventing memory leaks and ensuring
         the replica is ready for the next request.
         """
-        self.kill_switch.clear()
-        self.execution_ident = None
+        with trace_span(
+            "model_actor.cleanup", attributes={"ndif.model.key": self.model_key}
+        ) as span:
+            self.kill_switch.clear()
+            self.execution_ident = None
 
-        self.model._model.zero_grad()
-        self.request = None
-        gc.collect()
-        torch.cuda.empty_cache()
+            span.add_event("zero_grad")
+            self.model._model.zero_grad()
+            self.request = None
+
+            span.add_event("gc_collect")
+            gc.collect()
+
+            span.add_event("cuda_empty_cache")
+            torch.cuda.empty_cache()
 
     def log(self, *data):
         """Logs data during model execution.
@@ -728,6 +779,7 @@ class BaseModelDeploymentArgs(BaseModel):
     dtype: str | torch.dtype = "bfloat16"
     target_gpus: List[int] | None = None
     spawn_timestamp: float | None = None
+    trace_context: Optional[Dict[str, str]] = None
 
 
 @ray.remote(num_cpus=2, num_gpus=0, max_restarts=-1)

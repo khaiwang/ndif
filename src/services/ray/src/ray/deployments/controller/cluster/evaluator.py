@@ -7,7 +7,6 @@ import torch
 
 from nnsight.modeling.mixins import RemoteableMixin
 
-from .....metrics import ModelLoadTimeMetric
 from .....types import MODEL_KEY
 
 logger = logging.getLogger("ndif")
@@ -91,7 +90,8 @@ class ModelEvaluator:
             )
 
         eval_time = time.time() - eval_start
-        ModelLoadTimeMetric.update(eval_time, model_key, "evaluation")
-        logger.info(f"=> New model evaluated: {model_key} size: {model_size_bytes} in {eval_time:.2f}s")
+        logger.info(
+            f"=> New model evaluated: {model_key} size: {model_size_bytes} in {eval_time:.2f}s"
+        )
 
         return model_size_bytes
