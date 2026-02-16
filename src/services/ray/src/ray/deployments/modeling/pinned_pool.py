@@ -37,6 +37,7 @@ class PinnedBufferPool:
     def __init__(self) -> None:
         self._chunks: list[torch.Tensor] = []
         self._views: Dict[str, torch.Tensor] = {}
+        self._plan: list[tuple[int, int, int, torch.dtype, torch.Size, str]] = []
         self._ready = threading.Event()
         self._failed = False
         self._alloc_time: float = 0.0
@@ -96,9 +97,28 @@ class PinnedBufferPool:
 
         return True
 
+    def transfer_to_device(self, device: torch.device) -> Dict[str, torch.Tensor]:
+        """Transfer all chunks to *device* and return GPU-side typed views.
+
+        Instead of copying 200+ individual pinned views one-by-one, this copies
+        only ~8 contiguous uint8 chunks and then creates typed views on the GPU
+        side, drastically reducing per-transfer Python/CUDA API overhead.
+        """
+        gpu_chunks = []
+        for chunk in self._chunks:
+            gpu_chunks.append(chunk.to(device, non_blocking=True))
+
+        gpu_views: Dict[str, torch.Tensor] = {}
+        for chunk_idx, offset, nbytes, dtype, shape, name in self._plan:
+            raw = gpu_chunks[chunk_idx][offset : offset + nbytes]
+            gpu_views[name] = raw.view(dtype).reshape(shape)
+
+        return gpu_views
+
     def release(self) -> None:
         """Explicitly free all pinned chunks and views."""
         self._views.clear()
+        self._plan.clear()
         self._chunks.clear()
         gc.collect()
 
@@ -188,6 +208,7 @@ class PinnedBufferPool:
             return
 
         self._chunks = chunks
+        self._plan = plan
 
         # 4. Create typed views into the chunks.
         for chunk_idx, offset, nbytes, dtype, shape, name in plan:

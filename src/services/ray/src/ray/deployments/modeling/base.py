@@ -250,13 +250,16 @@ class BaseModelDeployment:
         module = self.model._module
 
         if len(self.target_gpus) == 1:
-            # Single-GPU fast path
+            # Single-GPU fast path with multi-stream dispatch to overlap
+            # CUDA API/driver overhead across streams.
             target_device = torch.device(f"cuda:{self.target_gpus[0]}")
             remove_accelerate_hooks(module)
-            for param in module.parameters():
-                param.data = param.data.to(target_device, non_blocking=True)
-            for buf in module.buffers():
-                buf.data = buf.data.to(target_device, non_blocking=True)
+            num_streams = 4
+            streams = [torch.cuda.Stream(device=target_device) for _ in range(num_streams)]
+            all_tensors = list(module.parameters()) + list(module.buffers())
+            for i, tensor in enumerate(all_tensors):
+                with torch.cuda.stream(streams[i % num_streams]):
+                    tensor.data = tensor.data.to(target_device, non_blocking=True)
             torch.cuda.synchronize()
             module.hf_device_map = {
                 name: str(self.target_gpus[0])
@@ -382,8 +385,9 @@ class BaseModelDeployment:
         )
 
         if use_fast_path:
-            # Single-GPU fast path: non_blocking copies from pinned memory.
-            self.logger.info("from_cache: single-GPU fast path (pinned)")
+            # Single-GPU fast path: bulk-transfer pinned chunks instead of
+            # individual parameters (~8 chunk .to() calls vs ~200 param calls).
+            self.logger.info("from_cache: single-GPU fast path (pinned, chunk bulk)")
             target_device = torch.device(f"cuda:{self.target_gpus[0]}")
 
             hook_start = time.time()
@@ -391,10 +395,18 @@ class BaseModelDeployment:
             hook_time = time.time() - hook_start
 
             dispatch_start = time.time()
+            gpu_views = self._pinned_pool.transfer_to_device(target_device)
+            torch.cuda.synchronize()
+
+            # Reassign param.data / buf.data to the GPU-side views.
             for name, param in module.named_parameters():
-                param.data = param.data.to(target_device, non_blocking=True)
+                if name in gpu_views:
+                    param.data = gpu_views[name]
             for name, buf in module.named_buffers():
-                buf.data = buf.data.to(target_device, non_blocking=True)
+                if name in gpu_views:
+                    buf.data = gpu_views[name]
+                elif buf.device.type != "cuda":
+                    buf.data = buf.data.to(target_device, non_blocking=True)
             torch.cuda.synchronize()
             dispatch_time = time.time() - dispatch_start
 
