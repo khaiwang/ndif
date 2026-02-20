@@ -38,7 +38,8 @@ from ...nn.security.protected_environment import (
     Protector,
 )
 from ...nn.security.protected_objects import protect
-from .pinned_pool import PinnedBufferPool, unique_named_tensors
+from .pinned_pool import unique_named_tensors
+from .relay_buffer import get_relay_buffer
 from .util import kill_thread, load_with_cache_deletion_retry, remove_accelerate_hooks
 
 
@@ -67,6 +68,21 @@ def _reassign_module_data(
             buf.data = gpu_views[name]
         elif buf.device.type != "cuda":
             buf.data = buf.data.to(target_device, non_blocking=True)
+
+
+def _reassign_module_data_cpu(
+    module: torch.nn.Module,
+    cpu_views: Dict[str, torch.Tensor],
+) -> None:
+    """Point every parameter/buffer in *module* at the corresponding CPU tensor."""
+    for name, param in module.named_parameters():
+        if name in cpu_views:
+            param.data = cpu_views[name]
+    for name, buf in module.named_buffers():
+        if name in cpu_views:
+            buf.data = cpu_views[name]
+        elif buf.device.type != "cpu":
+            buf.data = buf.data.cpu()
 
 
 class BaseModelDeployment:
@@ -166,8 +182,6 @@ class BaseModelDeployment:
             f"load_from_disk=see 'disk_cpu_load' metric, security={security_time:.2f}s)"
         )
 
-        # Pinned pool is allocated after dispatch_to_gpu() when GPU placement is known.
-        self._pinned_pool: PinnedBufferPool | None = None
 
     def _build_max_memory(self) -> Optional[Dict[int, int]]:
         """Build a max_memory dict that restricts model placement to target GPUs.
@@ -213,32 +227,6 @@ class BaseModelDeployment:
                     f"but model is on {actual_cuda}"
                 )
 
-    def _start_pinned_preallocation(self, reuse_ok: bool = False) -> None:
-        """Ensure a pinned buffer pool is ready for the next eviction cycle.
-
-        Args:
-            reuse_ok: If True, keep the existing pool when its layout still
-                matches the current model (same parameter names, shapes, dtypes).
-                This avoids an expensive free+realloc of pinned memory between
-                evict/reload cycles where the model architecture hasn't changed.
-        """
-        try:
-            if reuse_ok and self._pinned_pool is not None and self._pinned_pool.is_ready:
-                if self._pinned_pool.matches(self.model._module):
-                    self.logger.info("Reusing existing pinned buffer pool")
-                    return
-
-            if self._pinned_pool is not None:
-                self._pinned_pool.release()
-            pool = PinnedBufferPool()
-            pool.preallocate_async(self.model._module)
-            self._pinned_pool = pool
-        except Exception:
-            self.logger.warning(
-                "Failed to start pinned buffer pre-allocation", exc_info=True
-            )
-            self._pinned_pool = None
-
     def load_from_disk(self):
         start = time.time()
         self.logger.info(
@@ -252,6 +240,7 @@ class BaseModelDeployment:
                 device_map="cpu",
                 dispatch=self.dispatch,
                 torch_dtype=self.dtype,
+                low_cpu_mem_usage=True,
                 **self.extra_kwargs,
             )
         )
@@ -309,9 +298,6 @@ class BaseModelDeployment:
             f"Model dispatched to GPUs in {dispatch_time:.2f}s"
         )
 
-        # Pre-allocate pinned CPU buffers now that GPU placement is known
-        self._start_pinned_preallocation()
-
     async def to_cache(self):
         self.logger.info(f"Saving model to cache for model key {self.model_key}...")
         cache_start = time.time()
@@ -325,27 +311,17 @@ class BaseModelDeployment:
         hook_time = time.time() - hook_start
 
         transfer_start = time.time()
-        used_pinned = False
-        pool = self._pinned_pool
 
-        if pool is not None and pool.wait_ready(timeout=120.0):
-            # Pinned-memory fast path: DMA copies into pre-allocated buffers.
-            module = self.model._module
-            for name, tensor in unique_named_tensors(module):
-                pinned_buf = pool.get(name)
-                if pinned_buf is not None:
-                    pinned_buf.copy_(tensor.data, non_blocking=True)
-                    tensor.data = pinned_buf
-                elif tensor.device.type != "cpu":
-                    tensor.data = tensor.data.cpu()
-            torch.cuda.synchronize()
-            used_pinned = True
-            self.logger.info("to_cache: used pinned memory path")
-        else:
-            # Fallback: standard unpinned transfer.
-            self.model._module = self.model._module.cpu()
-            torch.cuda.synchronize()
-            self.logger.info("to_cache: used fallback unpinned path")
+        relay = get_relay_buffer()
+        relay.ensure_allocated()
+
+        module = self.model._module
+        cpu_views = relay.gpu_to_cpu(module)
+
+        # Reassign tensor.data to unpinned CPU tensors
+        _reassign_module_data_cpu(module, cpu_views)
+
+        self.logger.info("to_cache: used relay buffer path")
 
         transfer_time = time.time() - transfer_start
 
@@ -360,14 +336,10 @@ class BaseModelDeployment:
         ModelLoadTimeMetric.update(transfer_time, self.model_key, "to_cache_gpu_to_cpu")
         ModelLoadTimeMetric.update(cleanup_time, self.model_key, "to_cache_cleanup")
         ModelLoadTimeMetric.update(cache_time, self.model_key, "to_cache_total")
-        ModelLoadTimeMetric.update(
-            1.0 if used_pinned else 0.0, self.model_key, "to_cache_pinned"
-        )
         self.logger.info(
             f"Model cached in {cache_time:.2f}s "
             f"(cancel={cancel_time:.2f}s, hooks={hook_time:.2f}s, "
-            f"gpu_to_cpu={transfer_time:.2f}s, cleanup={cleanup_time:.2f}s, "
-            f"pinned={used_pinned})"
+            f"gpu_to_cpu={transfer_time:.2f}s, cleanup={cleanup_time:.2f}s)"
         )
 
     def from_cache(self, target_gpus: List[int]):
@@ -397,17 +369,9 @@ class BaseModelDeployment:
         max_memory = self._build_max_memory()
         module = self.model._module
 
-        # Decide whether to use the single-GPU pinned fast path.
-        use_fast_path = (
-            len(self.target_gpus) == 1
-            and self._pinned_pool is not None
-            and self._pinned_pool.is_ready
-        )
-
-        if use_fast_path:
-            # Single-GPU fast path: bulk-transfer pinned chunks instead of
-            # individual parameters (~8 chunk .to() calls vs ~200 param calls).
-            self.logger.info("from_cache: single-GPU fast path (pinned, chunk bulk)")
+        if len(self.target_gpus) == 1:
+            # Single-GPU relay fast path
+            self.logger.info("from_cache: single-GPU relay path")
             target_device = torch.device(f"cuda:{self.target_gpus[0]}")
 
             hook_start = time.time()
@@ -415,7 +379,9 @@ class BaseModelDeployment:
             hook_time = time.time() - hook_start
 
             dispatch_start = time.time()
-            gpu_views = self._pinned_pool.transfer_to_device(target_device)
+            relay = get_relay_buffer()
+            relay.ensure_allocated()
+            gpu_views = relay.cpu_to_gpu(module, target_device)
             torch.cuda.synchronize()
             _reassign_module_data(module, gpu_views, target_device)
             torch.cuda.synchronize()
@@ -424,8 +390,8 @@ class BaseModelDeployment:
             _set_single_gpu_device_map(module, self.target_gpus[0])
             device_map_time = 0.0
         else:
-            # Multi-GPU or unpinned: use dispatch_model for cross-device hooks.
-            self.logger.info("from_cache: multi-GPU/unpinned path")
+            # Multi-GPU: use dispatch_model for cross-device hooks.
+            self.logger.info("from_cache: multi-GPU path")
 
             device_map_start = time.time()
             device_map = _get_device_map(module, "auto", max_memory, None)
@@ -453,21 +419,14 @@ class BaseModelDeployment:
         ModelLoadTimeMetric.update(dispatch_time, self.model_key, "from_cache_cpu_to_gpu")
         ModelLoadTimeMetric.update(cleanup_time, self.model_key, "from_cache_cleanup")
         ModelLoadTimeMetric.update(load_time, self.model_key, "cache")
-        ModelLoadTimeMetric.update(
-            1.0 if use_fast_path else 0.0, self.model_key, "from_cache_fast_path"
-        )
 
         self.logger.info(
             f"Model loaded from cache in {load_time:.2f}s "
             f"(device_map={device_map_time:.2f}s, hooks={hook_time:.2f}s, "
-            f"cpu_to_gpu={dispatch_time:.2f}s, cleanup={cleanup_time:.2f}s, "
-            f"fast_path={use_fast_path})"
+            f"cpu_to_gpu={dispatch_time:.2f}s, cleanup={cleanup_time:.2f}s)"
         )
 
         self.cached = False
-
-        # Keep the existing pinned pool if its layout still matches (same model).
-        self._start_pinned_preallocation(reuse_ok=True)
 
     async def __call__(self, request: BackendRequestModel) -> None:
         """Executes the model service pipeline:
