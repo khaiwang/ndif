@@ -39,7 +39,7 @@ from ...nn.security.protected_environment import (
 )
 from ...nn.security.protected_objects import protect
 from .pinned_pool import unique_named_tensors
-from .relay_buffer import get_relay_buffer
+from . import lazy_pin
 from .util import kill_thread, load_with_cache_deletion_retry, remove_accelerate_hooks
 
 
@@ -312,16 +312,13 @@ class BaseModelDeployment:
 
         transfer_start = time.time()
 
-        relay = get_relay_buffer()
-        relay.ensure_allocated()
-
         module = self.model._module
-        cpu_views = relay.gpu_to_cpu(module)
+        cpu_views = lazy_pin.gpu_to_cpu(module)
 
         # Reassign tensor.data to unpinned CPU tensors
         _reassign_module_data_cpu(module, cpu_views)
 
-        self.logger.info("to_cache: used relay buffer path")
+        self.logger.info("to_cache: lazy-pin gpu_to_cpu complete")
 
         transfer_time = time.time() - transfer_start
 
@@ -370,8 +367,8 @@ class BaseModelDeployment:
         module = self.model._module
 
         if len(self.target_gpus) == 1:
-            # Single-GPU relay fast path
-            self.logger.info("from_cache: single-GPU relay path")
+            # Single-GPU lazy-pin fast path
+            self.logger.info("from_cache: single-GPU lazy-pin path")
             target_device = torch.device(f"cuda:{self.target_gpus[0]}")
 
             hook_start = time.time()
@@ -379,9 +376,7 @@ class BaseModelDeployment:
             hook_time = time.time() - hook_start
 
             dispatch_start = time.time()
-            relay = get_relay_buffer()
-            relay.ensure_allocated()
-            gpu_views = relay.cpu_to_gpu(module, target_device)
+            gpu_views = lazy_pin.cpu_to_gpu(module, target_device)
             torch.cuda.synchronize()
             _reassign_module_data(module, gpu_views, target_device)
             torch.cuda.synchronize()
