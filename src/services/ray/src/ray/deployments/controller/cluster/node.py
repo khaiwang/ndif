@@ -123,6 +123,32 @@ class Node:
             ),
         }
 
+    def evict_mirrors(
+        self, bytes_needed: int, exclude: Optional[Set[MODEL_KEY]] = None
+    ) -> int:
+        """Free pinned mirrors from HOT deployments to reclaim CPU memory.
+
+        Mirrors are cheaper to evict than WARM cache entries because the
+        model keeps serving from GPU — it just loses fast-eviction.
+
+        Returns the number of bytes freed.
+        """
+        freed = 0
+        for deployment in list(self.deployments.values()):
+            if freed >= bytes_needed:
+                break
+            if exclude and deployment.model_key in exclude:
+                continue
+            if not deployment.has_mirror:
+                continue
+            deployment.release_mirror()
+            self.cpu_resource.available_cpu_memory_bytes += deployment.size_bytes
+            freed += deployment.size_bytes
+            logger.info(
+                f"Evicted mirror for {deployment.model_key}, freed {deployment.size_bytes} bytes"
+            )
+        return freed
+
     def deploy(
         self,
         model_key: MODEL_KEY,
@@ -135,7 +161,7 @@ class Node:
         for eviction in candidate.evictions:
             self.evict(eviction, exclude=exclude)
 
-        self.deployments[model_key] = Deployment(
+        deployment = Deployment(
             model_key=model_key,
             deployment_level=DeploymentLevel.HOT,
             gpus=self.gpu_resource.assign_gpus(candidate.gpus_required),
@@ -143,6 +169,24 @@ class Node:
             dedicated=dedicated,
             node_id=self.id,
         )
+
+        # Reserve CPU memory for the pinned mirror if possible
+        if self.cpu_resource.available_cpu_memory_bytes >= size_bytes:
+            self.cpu_resource.available_cpu_memory_bytes -= size_bytes
+            deployment.has_mirror = True
+        else:
+            # Try freeing mirrors from other HOT models first
+            self.evict_mirrors(
+                size_bytes - self.cpu_resource.available_cpu_memory_bytes,
+                exclude=exclude,
+            )
+            if self.cpu_resource.available_cpu_memory_bytes >= size_bytes:
+                self.cpu_resource.available_cpu_memory_bytes -= size_bytes
+                deployment.has_mirror = True
+            else:
+                deployment.has_mirror = False
+
+        self.deployments[model_key] = deployment
 
         if model_key in self.cache:
             del self.cache[model_key]
@@ -155,6 +199,24 @@ class Node:
 
         self.gpu_resource.available_gpus.extend(deployment.gpus)
 
+        if deployment.has_mirror:
+            # Mirror already occupies reserved CPU memory — no new reservation
+            # needed. Just transition HOT → WARM with existing CPU reservation.
+            logger.info(
+                f"Evicting {model_key} from {self.name} (mirror exists, zero-copy to cache)"
+            )
+            del self.deployments[model_key]
+            self.cache[model_key] = Deployment(
+                model_key=deployment.model_key,
+                deployment_level=DeploymentLevel.WARM,
+                gpus=[],
+                size_bytes=deployment.size_bytes,
+                dedicated=False,
+                node_id=self.id,
+            )
+            return
+
+        # No mirror — need to reserve CPU memory for cache
         cpu_memory_needed = (
             deployment.size_bytes - self.cpu_resource.available_cpu_memory_bytes
         )
@@ -162,6 +224,13 @@ class Node:
         logger.info(
             f"Evicting {model_key} from {self.name} with cpu memory needed: {cpu_memory_needed} = {deployment.size_bytes} - {self.cpu_resource.available_cpu_memory_bytes}"
         )
+
+        if cpu_memory_needed > 0:
+            # Try evicting mirrors from other HOT models first (cheaper than WARM eviction)
+            self.evict_mirrors(cpu_memory_needed, exclude=exclude)
+            cpu_memory_needed = (
+                deployment.size_bytes - self.cpu_resource.available_cpu_memory_bytes
+            )
 
         if cpu_memory_needed > 0:
             cache_evictions = []

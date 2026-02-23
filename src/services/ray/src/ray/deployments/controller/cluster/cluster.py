@@ -1,5 +1,4 @@
 import logging
-import os
 import random
 import traceback
 from concurrent.futures import ThreadPoolExecutor
@@ -83,14 +82,10 @@ class Cluster:
                 gpu_memory_bytes = (
                     (node.resources_total["cuda_memory_bytes"]) / total_gpus
                 )
-                relay_total_bytes = (
-                    int(os.environ.get("NDIF_RELAY_BUFFER_SIZE_MB", "256"))
-                    * 1024 * 1024 * 2
-                )
                 cpu_memory_bytes = (
                     node.resources_total["cpu_memory_bytes"]
                     * self.model_cache_percentage
-                ) - relay_total_bytes
+                )
 
                 self.nodes[id] = Node(
                     id,
@@ -283,7 +278,7 @@ class Cluster:
                         "status": "evicted",
                         "node": node.name,
                         "freed_gpus": len(deployment.gpus),
-                        "freed_memory_gbs": deployment.size_bytes / 1024 / 1024 / 1024
+                        "freed_memory_gbs": deployment.size_bytes / 1024 / 1024 / 1024,
                     }
                     change = True
                     found = True

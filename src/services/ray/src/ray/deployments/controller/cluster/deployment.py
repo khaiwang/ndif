@@ -38,6 +38,7 @@ class Deployment:
         self.dedicated = dedicated
         self.node_id = node_id
         self.deployed = time.time()
+        self.has_mirror: bool = False
 
     @property
     def name(self):
@@ -80,6 +81,15 @@ class Deployment:
         except Exception:
             logger.exception(f"Error restarting actor {self.model_key}.")
             pass
+
+    def release_mirror(self):
+        """Tell the actor to release its pinned mirror, freeing CPU memory."""
+        try:
+            actor = self.actor
+            ray.get(actor.release_mirror.remote())
+            self.has_mirror = False
+        except Exception:
+            logger.exception(f"Error releasing mirror for {self.model_key}.")
 
     def cache(self):
         try:

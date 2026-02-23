@@ -38,16 +38,14 @@ from ...nn.security.protected_environment import (
     Protector,
 )
 from ...nn.security.protected_objects import protect
-from .pinned_pool import unique_named_tensors
-from . import lazy_pin
+from .pinned_pool import PinnedBufferPool, unique_named_tensors
+from .relay_buffer import get_relay_buffer
 from .util import kill_thread, load_with_cache_deletion_retry, remove_accelerate_hooks
 
 
 def _set_single_gpu_device_map(module: torch.nn.Module, gpu_id: int) -> None:
     """Set ``hf_device_map`` on *module* to map every sub-module to *gpu_id*."""
-    module.hf_device_map = {
-        name: str(gpu_id) for name, _ in module.named_modules()
-    }
+    module.hf_device_map = {name: str(gpu_id) for name, _ in module.named_modules()}
 
 
 def _reassign_module_data(
@@ -143,7 +141,13 @@ class BaseModelDeployment:
                 "cudaHostRegister allocator not available, using default"
             )
 
+        self._pinned_pool: PinnedBufferPool | None = None
+        self._bg_pin_thread: threading.Thread | None = None
+
         self.model = self.load_from_disk()
+
+        # Start background pinned pool allocation — overlaps with security setup
+        self._start_pinned_preallocation()
 
         security_start = time.time()
         self.persistent_objects = self.model._remoteable_persistent_objects()
@@ -171,7 +175,9 @@ class BaseModelDeployment:
         init_time = time.time() - init_start
         ray_overhead = init_start - spawn_timestamp if spawn_timestamp else 0.0
         ModelLoadTimeMetric.update(ray_overhead, self.model_key, "ray_actor_overhead")
-        ModelLoadTimeMetric.update(provider_time, self.model_key, "init_provider_connect")
+        ModelLoadTimeMetric.update(
+            provider_time, self.model_key, "init_provider_connect"
+        )
         ModelLoadTimeMetric.update(cuda_init_time, self.model_key, "init_cuda_context")
         ModelLoadTimeMetric.update(security_time, self.model_key, "init_security_setup")
         ModelLoadTimeMetric.update(init_time, self.model_key, "init_cpu_total")
@@ -181,7 +187,6 @@ class BaseModelDeployment:
             f"cuda_init={cuda_init_time:.2f}s, "
             f"load_from_disk=see 'disk_cpu_load' metric, security={security_time:.2f}s)"
         )
-
 
     def _build_max_memory(self) -> Optional[Dict[int, int]]:
         """Build a max_memory dict that restricts model placement to target GPUs.
@@ -214,9 +219,7 @@ class BaseModelDeployment:
         for param in module.parameters():
             devices.add(f"{param.device.type}:{param.device.index}")
 
-        self.logger.info(
-            f"Model loaded from {source} on devices: {devices}"
-        )
+        self.logger.info(f"Model loaded from {source} on devices: {devices}")
 
         if self.target_gpus:
             expected = {f"cuda:{gpu}" for gpu in self.target_gpus}
@@ -248,39 +251,91 @@ class BaseModelDeployment:
 
         ModelLoadTimeMetric.update(load_time, self.model_key, "disk_cpu_load")
 
-        self.logger.info(
-            f"Model loaded from disk to CPU in {load_time:.2f}s"
-        )
+        self.logger.info(f"Model loaded from disk to CPU in {load_time:.2f}s")
 
         return model
+
+    def _start_pinned_preallocation(self, reuse_ok: bool = False) -> None:
+        """Ensure a pinned buffer pool is ready for the next eviction cycle.
+
+        Args:
+            reuse_ok: If True, keep the existing pool when its layout still
+                matches the current model (same parameter names, shapes, dtypes).
+                This avoids an expensive free+realloc of pinned memory between
+                evict/reload cycles where the model architecture hasn't changed.
+        """
+        try:
+            if (
+                reuse_ok
+                and self._pinned_pool is not None
+                and self._pinned_pool.is_ready
+            ):
+                if self._pinned_pool.matches(self.model._module):
+                    self.logger.info("Reusing existing pinned buffer pool")
+                    return
+
+            if self._pinned_pool is not None:
+                self._pinned_pool.release()
+            pool = PinnedBufferPool()
+            pool.preallocate_async(self.model._module)
+            self._pinned_pool = pool
+        except Exception:
+            self.logger.warning(
+                "Failed to start pinned buffer pre-allocation", exc_info=True
+            )
+            self._pinned_pool = None
 
     def dispatch_to_gpu(self):
         """Move model from CPU to target GPUs. Called by controller after evictions complete."""
         start = time.time()
         torch.cuda.synchronize()
-        self.logger.info(
-            f"Dispatching model to GPUs {self.target_gpus}..."
-        )
+        self.logger.info(f"Dispatching model to GPUs {self.target_gpus}...")
 
         max_memory = self._build_max_memory()
         module = self.model._module
 
         if len(self.target_gpus) == 1:
-            # Single-GPU fast path: multi-stream transfer of deduplicated
-            # tensors, then reassign via gpu_views dict.
             target_device = torch.device(f"cuda:{self.target_gpus[0]}")
             remove_accelerate_hooks(module)
-            num_streams = 4
-            streams = [torch.cuda.Stream(device=target_device) for _ in range(num_streams)]
-            gpu_views: Dict[str, torch.Tensor] = {}
-            for i, (name, tensor) in enumerate(unique_named_tensors(module)):
-                with torch.cuda.stream(streams[i % num_streams]):
-                    gpu_views[name] = tensor.data.to(target_device, non_blocking=True)
-            torch.cuda.synchronize()
-            _reassign_module_data(module, gpu_views, target_device)
+
+            pool = self._pinned_pool
+            if pool is not None and pool.wait_ready(timeout=120.0):
+                # Pinned mirror path: copy mmap'd CPU → pinned views, then DMA → GPU
+                self.logger.info("dispatch_to_gpu: creating pinned mirror")
+                for name, tensor in unique_named_tensors(module):
+                    pinned_view = pool.get(name)
+                    if pinned_view is not None:
+                        pinned_view.copy_(tensor.data)
+                # Swap param.data to pinned views (frees mmap'd memory)
+                _reassign_module_data_cpu(module, pool._views)
+                # DMA pinned → GPU
+                gpu_views = pool.transfer_to_device(target_device)
+                torch.cuda.synchronize()
+                _reassign_module_data(module, gpu_views, target_device)
+                self.logger.info("dispatch_to_gpu: mirror created, pool persists")
+            else:
+                # Fallback: multi-stream .to(device), no mirror
+                self.logger.info("dispatch_to_gpu: fallback (no mirror)")
+                self._pinned_pool = None
+                num_streams = 4
+                streams = [
+                    torch.cuda.Stream(device=target_device) for _ in range(num_streams)
+                ]
+                gpu_views: Dict[str, torch.Tensor] = {}
+                for i, (name, tensor) in enumerate(unique_named_tensors(module)):
+                    with torch.cuda.stream(streams[i % num_streams]):
+                        gpu_views[name] = tensor.data.to(
+                            target_device, non_blocking=True
+                        )
+                torch.cuda.synchronize()
+                _reassign_module_data(module, gpu_views, target_device)
+
             _set_single_gpu_device_map(module, self.target_gpus[0])
         else:
-            # Multi-GPU: use accelerate dispatch_model
+            # Multi-GPU: use accelerate dispatch_model, no mirror support
+            if self._pinned_pool is not None:
+                self._pinned_pool.release()
+                self._pinned_pool = None
             remove_accelerate_hooks(module)
             device_map = _get_device_map(module, "auto", max_memory, None)
             self.model._module = dispatch_model(module, device_map)
@@ -295,8 +350,31 @@ class BaseModelDeployment:
         self._verify_device_placement(self.model._module, "disk")
 
         self.logger.info(
-            f"Model dispatched to GPUs in {dispatch_time:.2f}s"
+            f"Model dispatched to GPUs in {dispatch_time:.2f}s "
+            f"(mirror={'yes' if self._pinned_pool is not None else 'no'})"
         )
+
+    def _async_pin_upgrade(self, module: torch.nn.Module) -> None:
+        """Background thread: allocate pinned pool, copy unpinned CPU data into it."""
+        try:
+            pool = PinnedBufferPool()
+            pool.preallocate(module)
+            if pool.is_ready:
+                for name, tensor in unique_named_tensors(module):
+                    pinned_view = pool.get(name)
+                    if pinned_view is not None:
+                        pinned_view.copy_(tensor.data)
+                _reassign_module_data_cpu(module, pool._views)
+                self._pinned_pool = pool
+                gc.collect()
+                self.logger.info(
+                    "_async_pin_upgrade: pinned mirror created from unpinned cache"
+                )
+            else:
+                pool.release()
+                self.logger.warning("_async_pin_upgrade: pool allocation failed")
+        except Exception:
+            self.logger.warning("_async_pin_upgrade failed", exc_info=True)
 
     async def to_cache(self):
         self.logger.info(f"Saving model to cache for model key {self.model_key}...")
@@ -311,14 +389,23 @@ class BaseModelDeployment:
         hook_time = time.time() - hook_start
 
         transfer_start = time.time()
-
         module = self.model._module
-        cpu_views = lazy_pin.gpu_to_cpu(module)
+        used_mirror = False
 
-        # Reassign tensor.data to unpinned CPU tensors
-        _reassign_module_data_cpu(module, cpu_views)
-
-        self.logger.info("to_cache: lazy-pin gpu_to_cpu complete")
+        pool = self._pinned_pool
+        if pool is not None and pool.is_ready:
+            # Mirror path: data already in pinned pool (identical to GPU,
+            # inference is read-only). Just swap param.data to pinned views.
+            _reassign_module_data_cpu(module, pool._views)
+            used_mirror = True
+            self.logger.info("to_cache: zero-copy via pinned mirror")
+        else:
+            # No mirror: relay buffer GPU → unpinned CPU, then async pin upgrade
+            relay = get_relay_buffer()
+            relay.ensure_allocated()
+            cpu_views = relay.gpu_to_cpu(module)
+            _reassign_module_data_cpu(module, cpu_views)
+            self.logger.info("to_cache: relay buffer gpu_to_cpu complete")
 
         transfer_time = time.time() - transfer_start
 
@@ -326,6 +413,14 @@ class BaseModelDeployment:
         gc.collect()
         torch.cuda.empty_cache()
         cleanup_time = time.time() - cleanup_start
+
+        # If we used relay (no mirror), start background thread to upgrade
+        # unpinned CPU tensors to a pinned pool for fast reload.
+        if not used_mirror:
+            self._bg_pin_thread = threading.Thread(
+                target=self._async_pin_upgrade, args=(module,), daemon=True
+            )
+            self._bg_pin_thread.start()
 
         self.cached = True
 
@@ -336,7 +431,8 @@ class BaseModelDeployment:
         self.logger.info(
             f"Model cached in {cache_time:.2f}s "
             f"(cancel={cancel_time:.2f}s, hooks={hook_time:.2f}s, "
-            f"gpu_to_cpu={transfer_time:.2f}s, cleanup={cleanup_time:.2f}s)"
+            f"gpu_to_cpu={transfer_time:.2f}s, cleanup={cleanup_time:.2f}s, "
+            f"mirror={used_mirror})"
         )
 
     def from_cache(self, target_gpus: List[int]):
@@ -367,25 +463,55 @@ class BaseModelDeployment:
         module = self.model._module
 
         if len(self.target_gpus) == 1:
-            # Single-GPU lazy-pin fast path
-            self.logger.info("from_cache: single-GPU lazy-pin path")
             target_device = torch.device(f"cuda:{self.target_gpus[0]}")
 
-            hook_start = time.time()
-            remove_accelerate_hooks(module)
-            hook_time = time.time() - hook_start
+            # Wait for background pin upgrade if still running
+            if self._bg_pin_thread is not None and self._bg_pin_thread.is_alive():
+                self.logger.info("from_cache: waiting for async pin upgrade...")
+                self._bg_pin_thread.join()
+            self._bg_pin_thread = None
 
-            dispatch_start = time.time()
-            gpu_views = lazy_pin.cpu_to_gpu(module, target_device)
-            torch.cuda.synchronize()
-            _reassign_module_data(module, gpu_views, target_device)
-            torch.cuda.synchronize()
-            dispatch_time = time.time() - dispatch_start
+            pool = self._pinned_pool
+            use_fast_path = pool is not None and pool.is_ready
+
+            if use_fast_path:
+                # Pinned fast path: DMA from pinned pool → GPU
+                self.logger.info("from_cache: single-GPU pinned fast path")
+
+                hook_start = time.time()
+                remove_accelerate_hooks(module)
+                hook_time = time.time() - hook_start
+
+                dispatch_start = time.time()
+                gpu_views = pool.transfer_to_device(target_device)
+                torch.cuda.synchronize()
+                _reassign_module_data(module, gpu_views, target_device)
+                dispatch_time = time.time() - dispatch_start
+            else:
+                # Fallback: relay buffer CPU → GPU
+                self.logger.info("from_cache: single-GPU relay fallback")
+
+                hook_start = time.time()
+                remove_accelerate_hooks(module)
+                hook_time = time.time() - hook_start
+
+                dispatch_start = time.time()
+                relay = get_relay_buffer()
+                relay.ensure_allocated()
+                gpu_views = relay.cpu_to_gpu(module, target_device)
+                torch.cuda.synchronize()
+                _reassign_module_data(module, gpu_views, target_device)
+                dispatch_time = time.time() - dispatch_start
 
             _set_single_gpu_device_map(module, self.target_gpus[0])
             device_map_time = 0.0
         else:
             # Multi-GPU: use dispatch_model for cross-device hooks.
+            # Release pool if exists (can't mirror multi-GPU)
+            if self._pinned_pool is not None:
+                self._pinned_pool.release()
+                self._pinned_pool = None
+
             self.logger.info("from_cache: multi-GPU path")
 
             device_map_start = time.time()
@@ -410,8 +536,12 @@ class BaseModelDeployment:
 
         self._verify_device_placement(self.model._module, "cache")
 
-        ModelLoadTimeMetric.update(device_map_time, self.model_key, "from_cache_device_map")
-        ModelLoadTimeMetric.update(dispatch_time, self.model_key, "from_cache_cpu_to_gpu")
+        ModelLoadTimeMetric.update(
+            device_map_time, self.model_key, "from_cache_device_map"
+        )
+        ModelLoadTimeMetric.update(
+            dispatch_time, self.model_key, "from_cache_cpu_to_gpu"
+        )
         ModelLoadTimeMetric.update(cleanup_time, self.model_key, "from_cache_cleanup")
         ModelLoadTimeMetric.update(load_time, self.model_key, "cache")
 
@@ -422,6 +552,20 @@ class BaseModelDeployment:
         )
 
         self.cached = False
+
+        # Keep existing pinned pool if layout matches; otherwise re-allocate
+        self._start_pinned_preallocation(reuse_ok=True)
+
+    def release_mirror(self):
+        """Release the pinned mirror pool, freeing CPU memory.
+
+        Called by the controller when CPU memory is tight. The model continues
+        serving from GPU; future evictions will fall back to relay buffer.
+        """
+        if self._pinned_pool is not None:
+            self._pinned_pool.release()
+            self._pinned_pool = None
+            self.logger.info("Pinned mirror released (controller request)")
 
     async def __call__(self, request: BackendRequestModel) -> None:
         """Executes the model service pipeline:
