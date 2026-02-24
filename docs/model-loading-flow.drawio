@@ -1,0 +1,460 @@
+<mxfile host="65bd71144e">
+    <diagram id="main" name="Model Loading Pipeline">
+        <mxGraphModel dx="735" dy="416" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1500" pageHeight="1300" background="#ffffff" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="t" value="&lt;b&gt;NDIF Model Loading Pipeline — Before vs After Optimization&lt;/b&gt;" style="text;html=1;align=center;fontSize=16;fontColor=#1a1a2e;" parent="1" vertex="1">
+                    <mxGeometry x="300" y="10" width="600" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="hL" value="&lt;b&gt;BEFORE&lt;/b&gt; (pageable memory)" style="text;html=1;align=center;fontSize=13;fontColor=#7a4419;" parent="1" vertex="1">
+                    <mxGeometry x="140" y="42" width="300" height="22" as="geometry"/>
+                </mxCell>
+                <mxCell id="hR" value="&lt;b&gt;AFTER&lt;/b&gt; (pinned memory pool)" style="text;html=1;align=center;fontSize=13;fontColor=#1a6b1a;" parent="1" vertex="1">
+                    <mxGeometry x="780" y="42" width="300" height="22" as="geometry"/>
+                </mxCell>
+                <mxCell id="vd" value="" style="line;strokeWidth=2;strokeColor=#999999;direction=south;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="40" width="10" height="1240" as="geometry"/>
+                </mxCell>
+                <!-- ===== Row 1: Download ===== -->
+                <mxCell id="s1" value="&lt;b&gt;1. Download from HuggingFace Hub&lt;/b&gt;  (network-bound, not optimized)" style="text;html=1;align=left;fontSize=12;fontColor=#666666;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="70" width="450" height="22" as="geometry"/>
+                </mxCell>
+                <mxCell id="d1" value="HF Hub" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="60" y="100" width="80" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="d2" value="Download&lt;br&gt;safetensors" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="200" y="100" width="100" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="d3" value="~/.cache/&lt;br&gt;huggingface/" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="360" y="100" width="100" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="da1" style="edgeStyle=none;rounded=0;strokeColor=#999999;" parent="1" source="d1" target="d2" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="da2" style="edgeStyle=none;rounded=0;strokeColor=#999999;" parent="1" source="d2" target="d3" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="d4" value="HF Hub" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="700" y="100" width="80" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="d5" value="Download&lt;br&gt;safetensors" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="840" y="100" width="100" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="d6" value="~/.cache/&lt;br&gt;huggingface/" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="1000" y="100" width="100" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="da3" style="edgeStyle=none;rounded=0;strokeColor=#999999;" parent="1" source="d4" target="d5" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="da4" style="edgeStyle=none;rounded=0;strokeColor=#999999;" parent="1" source="d5" target="d6" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="same1" value="&lt;i&gt;identical&lt;/i&gt;" style="text;html=1;align=center;fontSize=10;fontColor=#999999;" parent="1" vertex="1">
+                    <mxGeometry x="1110" y="110" width="50" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="h1" value="" style="line;strokeWidth=1;strokeColor=#cccccc;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="150" width="1140" height="10" as="geometry"/>
+                </mxCell>
+                <!-- ===== Row 2: Load from Disk ===== -->
+                <mxCell id="s2" value="&lt;b&gt;2. Load from Disk to GPU&lt;/b&gt;  (cold deploy, not optimized)" style="text;html=1;align=left;fontSize=12;fontColor=#666666;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="165" width="400" height="22" as="geometry"/>
+                </mxCell>
+                <mxCell id="k1" value="Disk&lt;br&gt;(SSD)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="200" width="70" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="k2" value="Ray Actor&lt;br&gt;Spawn" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="140" y="200" width="80" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="k3" value="Load Weights&lt;br&gt;+ dispatch" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="250" y="200" width="90" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="k4" value="Evaluate&lt;br&gt;(meta)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="370" y="200" width="80" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="k5" value="GPU&lt;br&gt;&lt;b&gt;HOT&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="480" y="200" width="70" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="ka1" style="edgeStyle=none;rounded=0;" parent="1" source="k1" target="k2" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ka2" style="edgeStyle=none;rounded=0;" parent="1" source="k2" target="k3" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ka3" style="edgeStyle=none;rounded=0;" parent="1" source="k3" target="k4" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ka4" style="edgeStyle=none;rounded=0;" parent="1" source="k4" target="k5" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="p1" value="Disk&lt;br&gt;(SSD)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="680" y="200" width="70" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="p2" value="Ray Actor&lt;br&gt;Spawn" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="780" y="200" width="80" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="p3" value="Load Weights&lt;br&gt;+ dispatch" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="890" y="200" width="90" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="p4" value="Evaluate&lt;br&gt;(meta)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="1010" y="200" width="80" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="p5" value="GPU&lt;br&gt;&lt;b&gt;HOT&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="1120" y="200" width="70" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="pa1" style="edgeStyle=none;rounded=0;" parent="1" source="p1" target="p2" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pa2" style="edgeStyle=none;rounded=0;" parent="1" source="p2" target="p3" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pa3" style="edgeStyle=none;rounded=0;" parent="1" source="p3" target="p4" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pa4" style="edgeStyle=none;rounded=0;" parent="1" source="p4" target="p5" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pp" value="&lt;b&gt;Preallocate&lt;br&gt;Pinned Pool&lt;/b&gt;&lt;br&gt;(background)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#2d6a2d;strokeWidth=2;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="1120" y="260" width="90" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="ppa" style="edgeStyle=none;rounded=0;dashed=1;strokeColor=#2d6a2d;" parent="1" source="p5" target="pp" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="h2" value="" style="line;strokeWidth=1;strokeColor=#cccccc;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="325" width="1140" height="10" as="geometry"/>
+                </mxCell>
+                <!-- ===== Row 3: Evict ===== -->
+                <mxCell id="s3" value="&lt;b&gt;3. Evict Model (GPU → CPU)&lt;/b&gt;" style="text;html=1;align=left;fontSize=12;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="340" width="250" height="22" as="geometry"/>
+                </mxCell>
+                <mxCell id="e1" value="GPU&lt;br&gt;&lt;b&gt;HOT&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="380" width="70" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="e2" value="&lt;b&gt;model.cpu()&lt;/b&gt;&lt;br&gt;blocking copy" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="155" y="375" width="110" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="e3" value="gc.collect()&lt;br&gt;empty_cache()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="310" y="380" width="100" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="e4" value="CPU&lt;br&gt;&lt;b&gt;WARM&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#cc6600&quot;&gt;pageable&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="455" y="375" width="80" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="ea1" style="edgeStyle=none;rounded=0;" parent="1" source="e1" target="e2" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ea2" style="edgeStyle=none;rounded=0;" parent="1" source="e2" target="e3" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ea3" style="edgeStyle=none;rounded=0;" parent="1" source="e3" target="e4" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="f1" value="GPU&lt;br&gt;&lt;b&gt;HOT&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="680" y="380" width="70" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="f2" value="&lt;b&gt;DMA copy to&lt;br&gt;pinned buffer&lt;/b&gt;&lt;br&gt;non_blocking" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#2d6a2d;strokeWidth=2;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="795" y="372" width="110" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="f3" value="gc.collect()&lt;br&gt;empty_cache()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="380" width="100" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="f4" value="CPU&lt;br&gt;&lt;b&gt;WARM&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#1a6b1a&quot;&gt;&lt;b&gt;pinned&lt;/b&gt;&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#2d6a2d;strokeWidth=2;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="1095" y="375" width="80" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="fa1" style="edgeStyle=none;rounded=0;" parent="1" source="f1" target="f2" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="fa2" style="edgeStyle=none;rounded=0;" parent="1" source="f2" target="f3" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="fa3" style="edgeStyle=none;rounded=0;" parent="1" source="f3" target="f4" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="h3" value="" style="line;strokeWidth=1;strokeColor=#cccccc;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="450" width="1140" height="10" as="geometry"/>
+                </mxCell>
+                <!-- ===== Row 4: Reload (P6 — per-param .to()) ===== -->
+                <mxCell id="s4" value="&lt;b&gt;4. Reload Model (CPU → GPU)&lt;/b&gt;  — P6: per-parameter .to()" style="text;html=1;align=left;fontSize=12;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="465" width="450" height="22" as="geometry"/>
+                </mxCell>
+                <mxCell id="r1" value="CPU&lt;br&gt;&lt;b&gt;WARM&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#cc6600&quot;&gt;pageable&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="500" width="80" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="r2" value="Compute&lt;br&gt;&lt;b&gt;device_map&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="160" y="505" width="90" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="r3" value="&lt;b&gt;dispatch_model()&lt;/b&gt;&lt;br&gt;blocking .to()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="290" y="500" width="110" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="r4" value="gc.collect()&lt;br&gt;empty_cache()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="440" y="505" width="100" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="r5" value="GPU&lt;br&gt;&lt;b&gt;HOT&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="540" y="505" width="70" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="ra1" style="edgeStyle=none;rounded=0;" parent="1" source="r1" target="r2" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ra2" style="edgeStyle=none;rounded=0;" parent="1" source="r2" target="r3" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ra3" style="edgeStyle=none;rounded=0;" parent="1" source="r3" target="r4" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ra4" style="edgeStyle=none;rounded=0;" parent="1" source="r4" target="r5" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="g1" value="CPU&lt;br&gt;&lt;b&gt;WARM&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#1a6b1a&quot;&gt;&lt;b&gt;pinned&lt;/b&gt;&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#2d6a2d;strokeWidth=2;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="680" y="500" width="80" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="g2" value="&lt;font color=&quot;#999999&quot;&gt;&lt;s&gt;device_map&lt;/s&gt;&lt;br&gt;SKIPPED&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#cccccc;dashed=1;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="800" y="505" width="90" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="g3" value="&lt;b&gt;.to(gpu,&lt;br&gt;non_blocking)&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#cc6600&quot;&gt;x ~200 params&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#2d6a2d;strokeWidth=2;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="930" y="495" width="100" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="g4" value="gc.collect()&lt;br&gt;empty_cache()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="1070" y="505" width="100" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="g5" value="GPU&lt;br&gt;&lt;b&gt;HOT&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="1170" y="505" width="70" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="ga1" style="edgeStyle=none;rounded=0;" parent="1" source="g1" target="g3" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ga1b" style="edgeStyle=none;rounded=0;dashed=1;strokeColor=#cccccc;" parent="1" source="g1" target="g2" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ga2" style="edgeStyle=none;rounded=0;" parent="1" source="g3" target="g4" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ga3" style="edgeStyle=none;rounded=0;" parent="1" source="g4" target="g5" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="gp" value="&lt;b&gt;Reuse&lt;br&gt;Pinned Pool&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#1a6b1a&quot;&gt;matches() ✓&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#2d6a2d;strokeWidth=2;dashed=1;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="1170" y="555" width="100" height="48" as="geometry"/>
+                </mxCell>
+                <mxCell id="gpa" style="edgeStyle=none;rounded=0;dashed=1;strokeColor=#2d6a2d;" parent="1" source="g5" target="gp" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="h4" value="" style="line;strokeWidth=1;strokeColor=#cccccc;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="615" width="1140" height="10" as="geometry"/>
+                </mxCell>
+                <!-- ===== Row 5: Reload (P7 — chunk bulk transfer) ===== -->
+                <mxCell id="s5r" value="&lt;b&gt;5. Reload Model — Current (P7: Chunk Bulk Transfer)&lt;/b&gt;" style="text;html=1;align=left;fontSize=12;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="630" width="450" height="22" as="geometry"/>
+                </mxCell>
+                <mxCell id="s5r_sub" value="Replaces ~200 individual .to() calls with ~8 contiguous chunk copies" style="text;html=1;align=left;fontSize=10;fontColor=#666666;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="650" width="450" height="18" as="geometry"/>
+                </mxCell>
+                <!-- Left side: P6 per-param (for comparison) -->
+                <mxCell id="v1" value="CPU&lt;br&gt;&lt;b&gt;WARM&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#1a6b1a&quot;&gt;pinned&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#2d6a2d;strokeWidth=1;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="680" width="70" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="v2" value="&lt;b&gt;.to(gpu)&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#cc6600&quot;&gt;x ~200&lt;br&gt;per-param&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="155" y="680" width="90" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="v3" value="sync" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="290" y="690" width="50" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="v4" value="GPU&lt;br&gt;&lt;b&gt;HOT&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="385" y="688" width="70" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="va1" style="edgeStyle=none;rounded=0;" parent="1" source="v1" target="v2" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="va2" style="edgeStyle=none;rounded=0;" parent="1" source="v2" target="v3" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="va3" style="edgeStyle=none;rounded=0;" parent="1" source="v3" target="v4" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="v_label" value="&lt;font color=&quot;#cc6600&quot;&gt;P6 (previous)&lt;/font&gt;" style="text;html=1;align=center;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="480" y="693" width="90" height="18" as="geometry"/>
+                </mxCell>
+                <!-- Right side: P7 chunk bulk transfer (current) -->
+                <mxCell id="w1" value="CPU&lt;br&gt;&lt;b&gt;WARM&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#1a6b1a&quot;&gt;&lt;b&gt;pinned&lt;br&gt;chunks&lt;/b&gt;&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#2d6a2d;strokeWidth=2;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="680" y="675" width="80" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="w2" value="&lt;b&gt;chunk.to(gpu)&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#1a6b1a&quot;&gt;x ~8 bulk&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#2d6a2d;strokeWidth=2;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="805" y="678" width="100" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="w3" value="sync +&lt;br&gt;&lt;b&gt;reassign&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#1a6b1a&quot;&gt;GPU views&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#2d6a2d;strokeWidth=2;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="678" width="90" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="w4" value="gc.collect()&lt;br&gt;empty_cache()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="1085" y="688" width="100" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="w5" value="GPU&lt;br&gt;&lt;b&gt;HOT&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="1200" y="688" width="70" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="wa1" style="edgeStyle=none;rounded=0;" parent="1" source="w1" target="w2" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="wa2" style="edgeStyle=none;rounded=0;" parent="1" source="w2" target="w3" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="wa3" style="edgeStyle=none;rounded=0;" parent="1" source="w3" target="w4" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="wa4" style="edgeStyle=none;rounded=0;" parent="1" source="w4" target="w5" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="w_label" value="&lt;font color=&quot;#1a6b1a&quot;&gt;&lt;b&gt;P7 (current)&lt;/b&gt;&lt;/font&gt;" style="text;html=1;align=left;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="1200" y="730" width="80" height="18" as="geometry"/>
+                </mxCell>
+                <mxCell id="wp" value="&lt;b&gt;Reuse&lt;br&gt;Pinned Pool&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#1a6b1a&quot;&gt;matches() ✓&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#2d6a2d;strokeWidth=2;dashed=1;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="1200" y="755" width="100" height="45" as="geometry"/>
+                </mxCell>
+                <mxCell id="wpa" style="edgeStyle=none;rounded=0;dashed=1;strokeColor=#2d6a2d;" parent="1" source="w5" target="wp" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="h5" value="" style="line;strokeWidth=1;strokeColor=#cccccc;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="810" width="1240" height="10" as="geometry"/>
+                </mxCell>
+                <!-- ===== Times Table (shifted down by 195px) ===== -->
+                <mxCell id="s5" value="&lt;b&gt;Measured Times — Qwen2.5-7B-Instruct (~15 GB, single GPU)&lt;/b&gt;" style="text;html=1;align=left;fontSize=12;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="825" width="500" height="22" as="geometry"/>
+                </mxCell>
+                <mxCell id="th0" value="&lt;b&gt;Phase&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#333333;fontColor=#ffffff;fontSize=11;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="855" width="200" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="th1" value="&lt;b&gt;Before&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#333333;fontColor=#ffffff;fontSize=11;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="240" y="855" width="120" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="th2" value="&lt;b&gt;After&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#333333;fontColor=#ffffff;fontSize=11;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="360" y="855" width="120" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="th3" value="&lt;b&gt;What Changed&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#333333;fontColor=#ffffff;fontSize=11;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="480" y="855" width="250" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="t1a" value="Download (network)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;fontSize=10;align=left;spacingLeft=8;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="885" width="200" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="t1b" value="network-bound" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;fontSize=10;align=center;fontColor=#999999;" parent="1" vertex="1">
+                    <mxGeometry x="240" y="885" width="120" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="t1c" value="network-bound" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;fontSize=10;align=center;fontColor=#999999;" parent="1" vertex="1">
+                    <mxGeometry x="360" y="885" width="120" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="t1d" value="Not optimized" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;fontSize=10;align=left;spacingLeft=8;fontColor=#999999;" parent="1" vertex="1">
+                    <mxGeometry x="480" y="885" width="250" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="t2a" value="Disk load (cold deploy)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;fontSize=10;align=left;spacingLeft=8;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="913" width="200" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="t2b" value="2.53s" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;fontSize=10;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="240" y="913" width="120" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="t2c" value="2.53s" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;fontSize=10;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="360" y="913" width="120" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="t2d" value="Not optimized (SSD-bound @ 3.3 GB/s)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;fontSize=10;align=left;spacingLeft=8;fontColor=#999999;" parent="1" vertex="1">
+                    <mxGeometry x="480" y="913" width="250" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="t3a" value="Evict: GPU → CPU transfer" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;fontSize=10;align=left;spacingLeft=8;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="941" width="200" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="t3b" value="&lt;font color=&quot;#cc6600&quot;&gt;blocking .cpu()&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;fontSize=10;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="240" y="941" width="120" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="t3c" value="&lt;b&gt;0.59s&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;fontSize=10;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="360" y="941" width="120" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="t3d" value="&lt;b&gt;Pinned DMA + non_blocking copy&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;fontSize=10;align=left;spacingLeft=8;fontColor=#1a6b1a;" parent="1" vertex="1">
+                    <mxGeometry x="480" y="941" width="250" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="t4a" value="&lt;b&gt;Evict total&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;fontSize=10;align=left;spacingLeft=8;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="969" width="200" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="t4b" value="&lt;font color=&quot;#cc6600&quot;&gt;~2-3s (est.)&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;fontSize=10;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="240" y="969" width="120" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="t4c" value="&lt;b&gt;0.76s&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;fontSize=10;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="360" y="969" width="120" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="t4d" value="&lt;b&gt;Pre-allocated pool, reused across cycles&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;fontSize=10;align=left;spacingLeft=8;fontColor=#1a6b1a;" parent="1" vertex="1">
+                    <mxGeometry x="480" y="969" width="250" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="t5a" value="Reload: device_map" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;fontSize=10;align=left;spacingLeft=8;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="997" width="200" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="t5b" value="&lt;font color=&quot;#cc6600&quot;&gt;recomputed&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;fontSize=10;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="240" y="997" width="120" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="t5c" value="&lt;b&gt;SKIPPED&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;fontSize=10;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="360" y="997" width="120" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="t5d" value="&lt;b&gt;Single-GPU: set hf_device_map directly&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;fontSize=10;align=left;spacingLeft=8;fontColor=#1a6b1a;" parent="1" vertex="1">
+                    <mxGeometry x="480" y="997" width="250" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="t6a" value="Reload: CPU → GPU transfer" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;fontSize=10;align=left;spacingLeft=8;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="1025" width="200" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="t6b" value="&lt;font color=&quot;#cc6600&quot;&gt;dispatch_model&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;fontSize=10;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="240" y="1025" width="120" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="t6c" value="&lt;b&gt;0.60s&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;fontSize=10;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="360" y="1025" width="120" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="t6d" value="&lt;b&gt;P7: chunk.to() x8 + GPU view reassign&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;fontSize=10;align=left;spacingLeft=8;fontColor=#1a6b1a;" parent="1" vertex="1">
+                    <mxGeometry x="480" y="1025" width="250" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="t7a" value="&lt;b&gt;Reload total&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;fontSize=10;align=left;spacingLeft=8;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="1053" width="200" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="t7b" value="&lt;font color=&quot;#cc6600&quot;&gt;~2-3s (est.)&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;fontSize=10;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="240" y="1053" width="120" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="t7c" value="&lt;b&gt;0.90s&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;fontSize=10;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="360" y="1053" width="120" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="t7d" value="&lt;b&gt;Pinned fast path + chunk bulk + pool reuse&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;fontSize=10;align=left;spacingLeft=8;fontColor=#1a6b1a;" parent="1" vertex="1">
+                    <mxGeometry x="480" y="1053" width="250" height="28" as="geometry"/>
+                </mxCell>
+                <mxCell id="t8a" value="&lt;b&gt;Full warm cycle (evict + reload)&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e6e6e6;fontSize=11;align=left;spacingLeft=8;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="1089" width="200" height="32" as="geometry"/>
+                </mxCell>
+                <mxCell id="t8b" value="&lt;b&gt;~4-6s&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;fontSize=12;align=center;fontColor=#cc6600;" parent="1" vertex="1">
+                    <mxGeometry x="240" y="1089" width="120" height="32" as="geometry"/>
+                </mxCell>
+                <mxCell id="t8c" value="&lt;b&gt;1.66s&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;fontSize=12;align=center;fontColor=#1a6b1a;" parent="1" vertex="1">
+                    <mxGeometry x="360" y="1089" width="120" height="32" as="geometry"/>
+                </mxCell>
+                <mxCell id="t8d" value="&lt;b&gt;~3x faster&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;fontSize=12;align=center;fontColor=#1a6b1a;" parent="1" vertex="1">
+                    <mxGeometry x="480" y="1089" width="250" height="32" as="geometry"/>
+                </mxCell>
+                <!-- ===== Legend ===== -->
+                <mxCell id="leg" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#cccccc;dashed=1;" parent="1" vertex="1">
+                    <mxGeometry x="800" y="845" width="430" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="leg_t" value="&lt;b&gt;Legend&lt;/b&gt;" style="text;html=1;align=left;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="810" y="848" width="50" height="16" as="geometry"/>
+                </mxCell>
+                <mxCell id="l1" value="" style="rounded=1;fillColor=#fff2cc;strokeColor=#d6b656;" parent="1" vertex="1">
+                    <mxGeometry x="810" y="870" width="16" height="12" as="geometry"/>
+                </mxCell>
+                <mxCell id="l1t" value="Original (slow)" style="text;html=1;align=left;fontSize=9;" parent="1" vertex="1">
+                    <mxGeometry x="830" y="867" width="80" height="16" as="geometry"/>
+                </mxCell>
+                <mxCell id="l2" value="" style="rounded=1;fillColor=#d5e8d4;strokeColor=#2d6a2d;strokeWidth=2;" parent="1" vertex="1">
+                    <mxGeometry x="920" y="870" width="16" height="12" as="geometry"/>
+                </mxCell>
+                <mxCell id="l2t" value="Optimized" style="text;html=1;align=left;fontSize=9;" parent="1" vertex="1">
+                    <mxGeometry x="940" y="867" width="60" height="16" as="geometry"/>
+                </mxCell>
+                <mxCell id="l3" value="" style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" parent="1" vertex="1">
+                    <mxGeometry x="1010" y="870" width="16" height="12" as="geometry"/>
+                </mxCell>
+                <mxCell id="l3t" value="Unchanged" style="text;html=1;align=left;fontSize=9;" parent="1" vertex="1">
+                    <mxGeometry x="1030" y="867" width="60" height="16" as="geometry"/>
+                </mxCell>
+                <mxCell id="l4" value="" style="rounded=1;fillColor=#e1d5e7;strokeColor=#9673a6;" parent="1" vertex="1">
+                    <mxGeometry x="1100" y="870" width="16" height="12" as="geometry"/>
+                </mxCell>
+                <mxCell id="l4t" value="Model state" style="text;html=1;align=left;fontSize=9;" parent="1" vertex="1">
+                    <mxGeometry x="1120" y="867" width="70" height="16" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>
