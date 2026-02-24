@@ -42,6 +42,46 @@ from nnsight.intervention.tracing.globals import Globals
 from .util import kill_thread, load_with_cache_deletion_retry, remove_accelerate_hooks
 
 
+def _set_single_gpu_device_map(module: torch.nn.Module, gpu_id: int) -> None:
+    """Set ``hf_device_map`` on *module* to map every sub-module to *gpu_id*."""
+    module.hf_device_map = {name: str(gpu_id) for name, _ in module.named_modules()}
+
+
+def _reassign_module_data(
+    module: torch.nn.Module,
+    gpu_views: Dict[str, torch.Tensor],
+    target_device: torch.device,
+) -> None:
+    """Point every parameter/buffer in *module* at the corresponding GPU tensor.
+
+    Tensors present in *gpu_views* are reassigned directly.  Buffers not in
+    *gpu_views* that are still on CPU are moved to *target_device*.
+    """
+    for name, param in module.named_parameters():
+        if name in gpu_views:
+            param.data = gpu_views[name]
+    for name, buf in module.named_buffers():
+        if name in gpu_views:
+            buf.data = gpu_views[name]
+        elif buf.device.type != "cuda":
+            buf.data = buf.data.to(target_device, non_blocking=True)
+
+
+def unique_named_tensors(module: torch.nn.Module):
+    """Yield (name, tensor) for all unique params and buffers, deduplicated by data_ptr."""
+    seen_ptrs: set[int] = set()
+    for name, param in module.named_parameters():
+        ptr = param.data.data_ptr()
+        if ptr not in seen_ptrs:
+            seen_ptrs.add(ptr)
+            yield name, param
+    for name, buf in module.named_buffers():
+        ptr = buf.data_ptr()
+        if ptr not in seen_ptrs:
+            seen_ptrs.add(ptr)
+            yield name, buf
+
+
 class BaseModelDeployment:
     def __init__(
         self,
@@ -50,14 +90,18 @@ class BaseModelDeployment:
         dispatch: bool,
         dtype: str | torch.dtype,
         gpu_mem_bytes_by_id: Dict[int, int] | None = None,
+        spawn_timestamp: float | None = None,
         *args,
         extra_kwargs: Dict[str, Any] = {},
         **kwargs,
     ) -> None:
         super().__init__()
+        init_start = time.time()
 
+        provider_start = time.time()
         ObjectStoreProvider.connect()
         SioProvider.connect()
+        provider_time = time.time() - provider_start
 
         self.model_key = model_key
         self.execution_timeout = execution_timeout
@@ -65,6 +109,7 @@ class BaseModelDeployment:
         self.dtype = dtype
         self.extra_kwargs = extra_kwargs
         self.gpu_mem_bytes_by_id = gpu_mem_bytes_by_id or {}
+        self.target_gpus = list(self.gpu_mem_bytes_by_id.keys())
 
         self.cached = False
 
@@ -80,18 +125,21 @@ class BaseModelDeployment:
         # Set the default CUDA device to the first target GPU BEFORE any CUDA
         # call. This ensures the CUDA context (~400MiB) is created on the
         # target GPU rather than always landing on GPU 0.
-        if self.gpu_mem_bytes_by_id:
-            first_gpu = next(iter(self.gpu_mem_bytes_by_id))
-            torch.cuda.set_device(first_gpu)
+        cuda_init_start = time.time()
+        if self.target_gpus:
+            torch.cuda.set_device(self.target_gpus[0])
 
             # Set per-process memory fraction for each target GPU
             for gpu_id, mem_bytes in self.gpu_mem_bytes_by_id.items():
                 total = torch.cuda.get_device_properties(gpu_id).total_memory
                 fraction = min(mem_bytes / total, 1.0)
                 torch.cuda.set_per_process_memory_fraction(fraction, gpu_id)
+        cuda_init_time = time.time() - cuda_init_start
 
+        # CPU-only load: model stays on CPU until dispatch_to_gpu() is called
         self.model = self.load_from_disk()
 
+        security_start = time.time()
         self.persistent_objects = self.model._remoteable_persistent_objects()
 
         for key, value in self.persistent_objects.items():
@@ -103,7 +151,7 @@ class BaseModelDeployment:
         if dispatch:
             self.model._module.requires_grad_(False)
 
-        torch.cuda.empty_cache()
+        security_time = time.time() - security_start
 
         self.request: BackendRequestModel
 
@@ -113,6 +161,22 @@ class BaseModelDeployment:
         self.execution_ident = None
 
         StreamTracer.register(self.stream_send, self.stream_receive)
+
+        init_time = time.time() - init_start
+        ray_overhead = init_start - spawn_timestamp if spawn_timestamp else 0.0
+        ModelLoadTimeMetric.update(ray_overhead, self.model_key, "ray_actor_overhead")
+        ModelLoadTimeMetric.update(
+            provider_time, self.model_key, "init_provider_connect"
+        )
+        ModelLoadTimeMetric.update(cuda_init_time, self.model_key, "init_cuda_context")
+        ModelLoadTimeMetric.update(security_time, self.model_key, "init_security_setup")
+        ModelLoadTimeMetric.update(init_time, self.model_key, "init_cpu_total")
+        self.logger.info(
+            f"ModelActor.__init__ completed (CPU) in {init_time:.2f}s "
+            f"(ray_overhead={ray_overhead:.2f}s, provider={provider_time:.2f}s, "
+            f"cuda_init={cuda_init_time:.2f}s, "
+            f"load_from_disk=see 'disk_cpu_load' metric, security={security_time:.2f}s)"
+        )
 
     def _build_max_memory(self) -> Optional[Dict[int, int]]:
         """Build a max_memory dict that restricts model placement to target GPUs.
@@ -158,40 +222,81 @@ class BaseModelDeployment:
                 )
 
     def load_from_disk(self):
+        """Load model from disk to CPU only. GPU dispatch happens separately."""
         start = time.time()
-        torch.cuda.synchronize()
         self.logger.info(
-            f"Loading model from disk for model key {self.model_key} "
-            f"with gpu_mem_bytes_by_id {self.gpu_mem_bytes_by_id}..."
+            f"Loading model from disk (CPU) for model key {self.model_key} "
+            f"targeting GPUs {self.target_gpus}..."
         )
-
-        max_memory = self._build_max_memory()
 
         model = load_with_cache_deletion_retry(
             lambda: RemoteableMixin.from_model_key(
                 self.model_key,
-                device_map="auto",
-                max_memory=max_memory,
+                device_map="cpu",
                 dispatch=self.dispatch,
                 torch_dtype=self.dtype,
+                low_cpu_mem_usage=True,
                 attn_implementation="eager",
                 **self.extra_kwargs,
             )
         )
-        torch.cuda.synchronize()
         load_time = time.time() - start
 
-        ModelLoadTimeMetric.update(load_time, self.model_key, "disk")
+        ModelLoadTimeMetric.update(load_time, self.model_key, "disk_cpu_load")
 
-        self._verify_device_placement(model._module, "disk")
-
-        self.logger.info(f"Model loaded from disk in {load_time} seconds")
+        self.logger.info(f"Model loaded from disk to CPU in {load_time:.2f}s")
 
         return model
 
+    def dispatch_to_gpu(self):
+        """Move model from CPU to target GPUs. Called by controller after evictions complete."""
+        start = time.time()
+        torch.cuda.synchronize()
+        self.logger.info(f"Dispatching model to GPUs {self.target_gpus}...")
+
+        max_memory = self._build_max_memory()
+        module = self.model._module
+
+        if len(self.target_gpus) == 1:
+            # Single-GPU fast path: skip _get_device_map + dispatch_model,
+            # use multi-stream round-robin .to(device)
+            target_device = torch.device(f"cuda:{self.target_gpus[0]}")
+            remove_accelerate_hooks(module)
+
+            num_streams = 4
+            streams = [
+                torch.cuda.Stream(device=target_device) for _ in range(num_streams)
+            ]
+            gpu_views: Dict[str, torch.Tensor] = {}
+            for i, (name, tensor) in enumerate(unique_named_tensors(module)):
+                with torch.cuda.stream(streams[i % num_streams]):
+                    gpu_views[name] = tensor.data.to(
+                        target_device, non_blocking=True
+                    )
+            torch.cuda.synchronize()
+            _reassign_module_data(module, gpu_views, target_device)
+            _set_single_gpu_device_map(module, self.target_gpus[0])
+        else:
+            # Multi-GPU: use accelerate dispatch_model
+            remove_accelerate_hooks(module)
+            device_map = _get_device_map(module, "auto", max_memory, None)
+            self.model._module = dispatch_model(module, device_map)
+            torch.cuda.synchronize()
+
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        dispatch_time = time.time() - start
+        ModelLoadTimeMetric.update(dispatch_time, self.model_key, "disk_gpu_dispatch")
+
+        self._verify_device_placement(self.model._module, "disk")
+
+        self.logger.info(f"Model dispatched to GPUs in {dispatch_time:.2f}s")
+
     async def to_cache(self):
         self.logger.info(f"Saving model to cache for model key {self.model_key}...")
-        # torch.cuda.synchronize()
+        cache_start = time.time()
+
         await self.cancel()
 
         # Reset per-process memory fractions before releasing GPU memory
@@ -201,11 +306,15 @@ class BaseModelDeployment:
         remove_accelerate_hooks(self.model._module)
 
         self.model._module = self.model._module.cpu()
-        # torch.cuda.synchronize()
+
         gc.collect()
         torch.cuda.empty_cache()
 
         self.cached = True
+
+        cache_time = time.time() - cache_start
+        ModelLoadTimeMetric.update(cache_time, self.model_key, "to_cache_total")
+        self.logger.info(f"Model cached in {cache_time:.2f}s")
 
     def from_cache(self, gpu_mem_bytes_by_id: Dict[int, int]):
         """Restore model from CPU cache onto the specified GPU(s).
@@ -218,10 +327,11 @@ class BaseModelDeployment:
             gpu_mem_bytes_by_id: Dict mapping GPU index to allocated bytes.
         """
         self.gpu_mem_bytes_by_id = gpu_mem_bytes_by_id
+        self.target_gpus = list(gpu_mem_bytes_by_id.keys())
 
         # Switch default CUDA device to the new target GPU before any CUDA ops
-        if self.gpu_mem_bytes_by_id:
-            first_gpu = next(iter(self.gpu_mem_bytes_by_id))
+        if self.target_gpus:
+            first_gpu = self.target_gpus[0]
             torch.cuda.set_device(first_gpu)
 
             # Set per-process memory fraction for each target GPU
@@ -239,14 +349,37 @@ class BaseModelDeployment:
         )
 
         max_memory = self._build_max_memory()
+        module = self.model._module
 
-        device_map = _get_device_map(self.model._module, "auto", max_memory, None)
+        if len(self.target_gpus) == 1:
+            # Single-GPU fast path: direct .to(device) + manual hf_device_map
+            target_device = torch.device(f"cuda:{self.target_gpus[0]}")
 
-        remove_accelerate_hooks(self.model._module)
+            remove_accelerate_hooks(module)
 
-        self.model._module = dispatch_model(self.model._module, device_map)
+            num_streams = 4
+            streams = [
+                torch.cuda.Stream(device=target_device) for _ in range(num_streams)
+            ]
+            gpu_views: Dict[str, torch.Tensor] = {}
+            for i, (name, tensor) in enumerate(unique_named_tensors(module)):
+                with torch.cuda.stream(streams[i % num_streams]):
+                    gpu_views[name] = tensor.data.to(
+                        target_device, non_blocking=True
+                    )
+            torch.cuda.synchronize()
+            _reassign_module_data(module, gpu_views, target_device)
+            _set_single_gpu_device_map(module, self.target_gpus[0])
+        else:
+            # Multi-GPU: use dispatch_model for cross-device hooks
+            device_map = _get_device_map(module, "auto", max_memory, None)
 
-        torch.cuda.synchronize()
+            remove_accelerate_hooks(module)
+
+            self.model._module = dispatch_model(module, device_map)
+
+            torch.cuda.synchronize()
+
         gc.collect()
         torch.cuda.empty_cache()
 
@@ -254,7 +387,7 @@ class BaseModelDeployment:
 
         self._verify_device_placement(self.model._module, "cache")
 
-        self.logger.info(f"Model loaded from cache in {load_time} seconds")
+        self.logger.info(f"Model loaded from cache in {load_time:.2f}s")
 
         ModelLoadTimeMetric.update(load_time, self.model_key, "cache")
 
@@ -533,6 +666,7 @@ class BaseModelDeploymentArgs(BaseModel):
     dispatch: bool = True
     dtype: str | torch.dtype = torch.bfloat16
     gpu_mem_bytes_by_id: Dict[int, int] | None = None
+    spawn_timestamp: float | None = None
 
 
 @ray.remote(num_cpus=2, num_gpus=0, max_restarts=-1)
