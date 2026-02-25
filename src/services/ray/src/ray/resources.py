@@ -3,6 +3,8 @@ import json
 import psutil
 import torch
 
+from .numa import get_gpu_numa_mapping
+
 
 def get_available_cpu_memory_bytes():
     mem = psutil.virtual_memory()
@@ -28,6 +30,16 @@ def get_total_cudamemory_bytes(return_ids=False) -> int:
     return int(cudamemory)
 
 
+def get_numa_topology() -> dict:
+    """Return GPU-to-NUMA mapping for resource reporting.
+
+    Returns a dict like {"gpu_to_numa": {0: 0, 1: 0, 2: 1, 3: 1}}.
+    Returns an empty mapping if NUMA info is unavailable.
+    """
+    gpu_count = torch.cuda.device_count()
+    return {"gpu_to_numa": get_gpu_numa_mapping(gpu_count)}
+
+
 def main(head: bool, name: str = None):
     resources = {}
 
@@ -36,6 +48,7 @@ def main(head: bool, name: str = None):
 
     resources["cuda_memory_bytes"] = get_total_cudamemory_bytes()
     resources["cpu_memory_bytes"] = get_available_cpu_memory_bytes()
+    resources["numa_topology"] = get_numa_topology()
 
     if name is not None:
         resources[name] = 10

@@ -39,6 +39,7 @@ from ...nn.security.protected_environment import (
     Protector,
 )
 from .util import kill_thread, load_with_cache_deletion_retry, remove_accelerate_hooks
+from ....numa import apply_numa_affinity
 
 
 class BaseModelDeployment:
@@ -75,6 +76,10 @@ class BaseModelDeployment:
             dtype = getattr(torch, dtype)
 
         torch.set_default_dtype(torch.bfloat16)
+
+        # Best-effort NUMA affinity: pin to cores/memory near our GPUs
+        gpu_indices = [int(d) for d in cuda_devices.split(",") if d.strip()]
+        self._numa_node_ids, self._numa_topology = apply_numa_affinity(gpu_indices)
 
         self.model = self.load_from_disk()
 
@@ -132,6 +137,12 @@ class BaseModelDeployment:
 
         remove_accelerate_hooks(self.model._module)
 
+        # Set memory policy before .cpu() so host memory lands on NUMA-local banks
+        if self._numa_node_ids and len(self._numa_node_ids) == 1:
+            from ....numa import set_memory_policy_preferred
+
+            set_memory_policy_preferred(next(iter(self._numa_node_ids)))
+
         self.model._module = self.model._module.cpu()
         # torch.cuda.synchronize()
         gc.collect()
@@ -141,6 +152,12 @@ class BaseModelDeployment:
 
     def from_cache(self, cuda_devices: str):
         os.environ["CUDA_VISIBLE_DEVICES"] = cuda_devices
+
+        # Re-apply NUMA affinity for the (potentially new) GPU set
+        gpu_indices = [int(d) for d in cuda_devices.split(",") if d.strip()]
+        self._numa_node_ids, self._numa_topology = apply_numa_affinity(
+            gpu_indices, topology=self._numa_topology
+        )
 
         torch.cuda.synchronize()
         start = time.time()

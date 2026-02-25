@@ -88,6 +88,16 @@ class Cluster:
                     * self.model_cache_percentage
                 )
 
+                # Extract NUMA topology if reported by the node
+                gpu_to_numa = {}
+                numa_topo = node.resources_total.get("numa_topology")
+                if isinstance(numa_topo, dict):
+                    raw = numa_topo.get("gpu_to_numa", {})
+                    # Keys may be strings from JSON; normalize to int
+                    gpu_to_numa = {
+                        int(k): int(v) for k, v in raw.items()
+                    }
+
                 self.nodes[id] = Node(
                     id,
                     name,
@@ -98,6 +108,7 @@ class Cluster:
                         cpu_memory_bytes=cpu_memory_bytes,
                         available_cpu_memory_bytes=cpu_memory_bytes,
                         available_gpus=list(range(int(total_gpus))),
+                        gpu_to_numa=gpu_to_numa,
                     ),
                     minimum_deployment_time_seconds=self.minimum_deployment_time_seconds,
                 )
