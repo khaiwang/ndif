@@ -1,0 +1,354 @@
+<mxfile host="app.diagrams.net" agent="Claude" version="26.0.0">
+  <!-- Page 1: Dual-Socket NUMA Topology -->
+  <diagram id="numa-topology" name="Dual-Socket NUMA Topology">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <!-- Title -->
+        <mxCell id="title1" value="&lt;b&gt;Typical Dual-Socket Server with 8 GPUs — NUMA Topology&lt;/b&gt;" style="text;html=1;fontSize=18;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="250" y="20" width="700" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- NUMA Node 0 -->
+        <mxCell id="numa0" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=2;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="40" y="80" width="560" height="380" as="geometry"/>
+        </mxCell>
+        <mxCell id="numa0_label" value="&lt;b&gt;NUMA Node 0&lt;/b&gt;" style="text;html=1;fontSize=14;align=center;fillColor=#dae8fc;strokeColor=#6c8ebf;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="230" y="90" width="140" height="30" as="geometry"/>
+        </mxCell>
+
+        <!-- Socket 0 -->
+        <mxCell id="cpu0" value="&lt;b&gt;CPU Socket 0&lt;/b&gt;&lt;br&gt;Cores 0-15" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=2;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="80" y="140" width="200" height="60" as="geometry"/>
+        </mxCell>
+
+        <!-- Local Memory 0 -->
+        <mxCell id="mem0" value="&lt;b&gt;Local DRAM&lt;/b&gt;&lt;br&gt;256 GB" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;strokeWidth=2;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="340" y="140" width="200" height="60" as="geometry"/>
+        </mxCell>
+
+        <!-- PCIe Switch 0 -->
+        <mxCell id="pcie0" value="&lt;b&gt;PCIe Switch&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;strokeWidth=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="180" y="230" width="240" height="30" as="geometry"/>
+        </mxCell>
+
+        <!-- GPUs 0-3 -->
+        <mxCell id="gpu0" value="&lt;b&gt;GPU 0&lt;/b&gt;&lt;br&gt;80GB" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="60" y="290" width="110" height="55" as="geometry"/>
+        </mxCell>
+        <mxCell id="gpu1" value="&lt;b&gt;GPU 1&lt;/b&gt;&lt;br&gt;80GB" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="190" y="290" width="110" height="55" as="geometry"/>
+        </mxCell>
+        <mxCell id="gpu2" value="&lt;b&gt;GPU 2&lt;/b&gt;&lt;br&gt;80GB" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="320" y="290" width="110" height="55" as="geometry"/>
+        </mxCell>
+        <mxCell id="gpu3" value="&lt;b&gt;GPU 3&lt;/b&gt;&lt;br&gt;80GB" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="450" y="290" width="110" height="55" as="geometry"/>
+        </mxCell>
+
+        <!-- PCIe connections node 0 -->
+        <mxCell id="pcie0_gpu0" style="edgeStyle=orthogonalEdgeStyle;strokeWidth=2;strokeColor=#82b366;" edge="1" parent="1" source="pcie0" target="gpu0"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="pcie0_gpu1" style="edgeStyle=orthogonalEdgeStyle;strokeWidth=2;strokeColor=#82b366;" edge="1" parent="1" source="pcie0" target="gpu1"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="pcie0_gpu2" style="edgeStyle=orthogonalEdgeStyle;strokeWidth=2;strokeColor=#82b366;" edge="1" parent="1" source="pcie0" target="gpu2"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="pcie0_gpu3" style="edgeStyle=orthogonalEdgeStyle;strokeWidth=2;strokeColor=#82b366;" edge="1" parent="1" source="pcie0" target="gpu3"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="cpu0_pcie0" style="edgeStyle=orthogonalEdgeStyle;strokeWidth=2;strokeColor=#d6b656;" edge="1" parent="1" source="cpu0" target="pcie0"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="mem0_cpu0" style="edgeStyle=orthogonalEdgeStyle;strokeWidth=2;strokeColor=#9673a6;" edge="1" parent="1" source="cpu0" target="mem0"><mxGeometry relative="1" as="geometry"/></mxCell>
+
+        <!-- NVLink label -->
+        <mxCell id="nvl0" value="NVLink" style="text;html=1;fontSize=9;align=center;fontColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="200" y="360" width="50" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="nvl0_line" style="strokeWidth=2;strokeColor=#82b366;dashed=1;" edge="1" parent="1" source="gpu0" target="gpu1"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="nvl1_line" style="strokeWidth=2;strokeColor=#82b366;dashed=1;" edge="1" parent="1" source="gpu2" target="gpu3"><mxGeometry relative="1" as="geometry"/></mxCell>
+
+        <!-- ============ UPI/QPI Interconnect ============ -->
+        <mxCell id="upi" value="&lt;b&gt;UPI / QPI Interconnect&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#CC0000&quot;&gt;~2x latency, shared bandwidth&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;strokeWidth=3;fontSize=12;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="610" y="240" width="210" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="upi_n0" style="strokeWidth=3;strokeColor=#b85450;dashed=1;" edge="1" parent="1" source="numa0" target="upi"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="upi_n1" style="strokeWidth=3;strokeColor=#b85450;dashed=1;" edge="1" parent="1" source="upi" target="numa1"><mxGeometry relative="1" as="geometry"/></mxCell>
+
+        <!-- NUMA Node 1 -->
+        <mxCell id="numa1" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=2;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="830" y="80" width="560" height="380" as="geometry"/>
+        </mxCell>
+        <mxCell id="numa1_label" value="&lt;b&gt;NUMA Node 1&lt;/b&gt;" style="text;html=1;fontSize=14;align=center;fillColor=#dae8fc;strokeColor=#6c8ebf;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="1020" y="90" width="140" height="30" as="geometry"/>
+        </mxCell>
+
+        <!-- Socket 1 -->
+        <mxCell id="cpu1" value="&lt;b&gt;CPU Socket 1&lt;/b&gt;&lt;br&gt;Cores 16-31" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=2;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="870" y="140" width="200" height="60" as="geometry"/>
+        </mxCell>
+
+        <!-- Local Memory 1 -->
+        <mxCell id="mem1" value="&lt;b&gt;Local DRAM&lt;/b&gt;&lt;br&gt;256 GB" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;strokeWidth=2;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1130" y="140" width="200" height="60" as="geometry"/>
+        </mxCell>
+
+        <!-- PCIe Switch 1 -->
+        <mxCell id="pcie1" value="&lt;b&gt;PCIe Switch&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;strokeWidth=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="970" y="230" width="240" height="30" as="geometry"/>
+        </mxCell>
+
+        <!-- GPUs 4-7 -->
+        <mxCell id="gpu4" value="&lt;b&gt;GPU 4&lt;/b&gt;&lt;br&gt;80GB" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="850" y="290" width="110" height="55" as="geometry"/>
+        </mxCell>
+        <mxCell id="gpu5" value="&lt;b&gt;GPU 5&lt;/b&gt;&lt;br&gt;80GB" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="980" y="290" width="110" height="55" as="geometry"/>
+        </mxCell>
+        <mxCell id="gpu6" value="&lt;b&gt;GPU 6&lt;/b&gt;&lt;br&gt;80GB" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1110" y="290" width="110" height="55" as="geometry"/>
+        </mxCell>
+        <mxCell id="gpu7" value="&lt;b&gt;GPU 7&lt;/b&gt;&lt;br&gt;80GB" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1240" y="290" width="110" height="55" as="geometry"/>
+        </mxCell>
+
+        <!-- PCIe connections node 1 -->
+        <mxCell id="pcie1_gpu4" style="edgeStyle=orthogonalEdgeStyle;strokeWidth=2;strokeColor=#82b366;" edge="1" parent="1" source="pcie1" target="gpu4"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="pcie1_gpu5" style="edgeStyle=orthogonalEdgeStyle;strokeWidth=2;strokeColor=#82b366;" edge="1" parent="1" source="pcie1" target="gpu5"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="pcie1_gpu6" style="edgeStyle=orthogonalEdgeStyle;strokeWidth=2;strokeColor=#82b366;" edge="1" parent="1" source="pcie1" target="gpu6"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="pcie1_gpu7" style="edgeStyle=orthogonalEdgeStyle;strokeWidth=2;strokeColor=#82b366;" edge="1" parent="1" source="pcie1" target="gpu7"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="cpu1_pcie1" style="edgeStyle=orthogonalEdgeStyle;strokeWidth=2;strokeColor=#d6b656;" edge="1" parent="1" source="cpu1" target="pcie1"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="mem1_cpu1" style="edgeStyle=orthogonalEdgeStyle;strokeWidth=2;strokeColor=#9673a6;" edge="1" parent="1" source="cpu1" target="mem1"><mxGeometry relative="1" as="geometry"/></mxCell>
+
+        <!-- NVLink label node 1 -->
+        <mxCell id="nvl1" value="NVLink" style="text;html=1;fontSize=9;align=center;fontColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="990" y="360" width="50" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="nvl2_line" style="strokeWidth=2;strokeColor=#82b366;dashed=1;" edge="1" parent="1" source="gpu4" target="gpu5"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="nvl3_line" style="strokeWidth=2;strokeColor=#82b366;dashed=1;" edge="1" parent="1" source="gpu6" target="gpu7"><mxGeometry relative="1" as="geometry"/></mxCell>
+
+        <!-- Key insight callout -->
+        <mxCell id="insight" value="&lt;b&gt;Why NUMA affinity matters:&lt;/b&gt;&lt;br&gt;&lt;br&gt;A ModelActor on &lt;b&gt;GPU 0-3&lt;/b&gt; whose threads run on &lt;b&gt;Cores 16-31&lt;/b&gt; (wrong socket)&lt;br&gt;must cross UPI for &lt;i&gt;every&lt;/i&gt; memory access and GPU DMA transfer.&lt;br&gt;&lt;br&gt;• CPU↔DRAM latency: &lt;b&gt;~90ns local vs ~150ns remote&lt;/b&gt;&lt;br&gt;• PCIe DMA bandwidth: &lt;b&gt;reduced by contention on UPI&lt;/b&gt;&lt;br&gt;• Cache-restore (from_cache → GPU): &lt;b&gt;weight data crosses UPI twice&lt;/b&gt;&lt;br&gt;&amp;nbsp;&amp;nbsp;(remote DRAM → UPI → local CPU → PCIe → GPU)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=2;fontSize=11;align=left;spacingLeft=10;spacingRight=10;" vertex="1" parent="1">
+          <mxGeometry x="40" y="490" width="530" height="160" as="geometry"/>
+        </mxCell>
+
+        <!-- Legend -->
+        <mxCell id="legend" value="&lt;b&gt;Legend&lt;/b&gt;" style="text;html=1;fontSize=12;align=left;" vertex="1" parent="1">
+          <mxGeometry x="700" y="490" width="100" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="leg_local" value="── Local path (fast)" style="text;html=1;fontSize=11;align=left;fontColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="700" y="515" width="200" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="leg_remote" value="- - Remote path via UPI (slow)" style="text;html=1;fontSize=11;align=left;fontColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="700" y="540" width="250" height="20" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+
+  <!-- Page 2: Before vs After -->
+  <diagram id="before-after" name="Before vs After NUMA Optimization">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="850" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <!-- ============ BEFORE ============ -->
+        <mxCell id="before_box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;strokeWidth=2;opacity=15;arcSize=5;" vertex="1" parent="1">
+          <mxGeometry x="30" y="70" width="640" height="700" as="geometry"/>
+        </mxCell>
+        <mxCell id="before_title" value="&lt;b&gt;BEFORE — No NUMA Awareness&lt;/b&gt;" style="text;html=1;fontSize=16;align=center;fontColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="140" y="30" width="400" height="35" as="geometry"/>
+        </mxCell>
+
+        <!-- NUMA Node 0 before -->
+        <mxCell id="b_n0" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=1;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="50" y="120" width="280" height="220" as="geometry"/>
+        </mxCell>
+        <mxCell id="b_n0_label" value="&lt;b&gt;NUMA Node 0&lt;/b&gt;" style="text;html=1;fontSize=11;align=center;" vertex="1" parent="1">
+          <mxGeometry x="130" y="125" width="120" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="b_cpu0" value="Cores 0-15" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="70" y="155" width="100" height="35" as="geometry"/>
+        </mxCell>
+        <mxCell id="b_mem0" value="DRAM 0" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="200" y="155" width="100" height="35" as="geometry"/>
+        </mxCell>
+        <mxCell id="b_gpu01" value="GPU 0-3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="110" y="280" width="160" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="b_pcie0" style="strokeWidth=1;strokeColor=#82b366;" edge="1" parent="1" source="b_cpu0" target="b_gpu01"><mxGeometry relative="1" as="geometry"/></mxCell>
+
+        <!-- NUMA Node 1 before -->
+        <mxCell id="b_n1" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=1;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="370" y="120" width="280" height="220" as="geometry"/>
+        </mxCell>
+        <mxCell id="b_n1_label" value="&lt;b&gt;NUMA Node 1&lt;/b&gt;" style="text;html=1;fontSize=11;align=center;" vertex="1" parent="1">
+          <mxGeometry x="450" y="125" width="120" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="b_cpu1" value="Cores 16-31" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="390" y="155" width="100" height="35" as="geometry"/>
+        </mxCell>
+        <mxCell id="b_mem1" value="DRAM 1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="520" y="155" width="100" height="35" as="geometry"/>
+        </mxCell>
+        <mxCell id="b_gpu45" value="GPU 4-7" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="430" y="280" width="160" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="b_pcie1" style="strokeWidth=1;strokeColor=#82b366;" edge="1" parent="1" source="b_cpu1" target="b_gpu45"><mxGeometry relative="1" as="geometry"/></mxCell>
+
+        <!-- UPI before -->
+        <mxCell id="b_upi" style="strokeWidth=2;strokeColor=#b85450;dashed=1;" edge="1" parent="1" source="b_n0" target="b_n1"><mxGeometry relative="1" as="geometry"/></mxCell>
+
+        <!-- ModelActor before — scattered across both nodes -->
+        <mxCell id="b_actor" value="&lt;b&gt;ModelActor&lt;/b&gt; (GPU 0-3)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;strokeWidth=2;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="160" y="380" width="200" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- Bad path 1: threads on wrong socket -->
+        <mxCell id="b_bad1" value="" style="edgeStyle=orthogonalEdgeStyle;strokeWidth=3;strokeColor=#CC0000;dashed=1;" edge="1" parent="1" source="b_actor" target="b_cpu1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="440" y="400"/>
+              <mxPoint x="440" y="173"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="b_bad1_label" value="&lt;font color=&quot;#CC0000&quot;&gt;&lt;b&gt;OS schedules threads&lt;br&gt;on remote cores!&lt;/b&gt;&lt;/font&gt;" style="text;html=1;fontSize=10;align=center;" vertex="1" parent="1">
+          <mxGeometry x="440" y="370" width="150" height="35" as="geometry"/>
+        </mxCell>
+
+        <!-- Bad path 2: cache lands on wrong DRAM -->
+        <mxCell id="b_bad2" value="" style="edgeStyle=orthogonalEdgeStyle;strokeWidth=3;strokeColor=#CC0000;dashed=1;" edge="1" parent="1" source="b_actor" target="b_mem1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="570" y="400"/>
+              <mxPoint x="570" y="173"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- to_cache problem -->
+        <mxCell id="b_cache_box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;strokeWidth=1;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="50" y="450" width="600" height="130" as="geometry"/>
+        </mxCell>
+        <mxCell id="b_cache_title" value="&lt;b&gt;to_cache() → .cpu()&lt;/b&gt;" style="text;html=1;fontSize=12;align=left;" vertex="1" parent="1">
+          <mxGeometry x="65" y="455" width="200" height="25" as="geometry"/>
+        </mxCell>
+        <mxCell id="b_cache_flow" value="GPU 0 weights → .cpu() → &lt;font color=&quot;#CC0000&quot;&gt;&lt;b&gt;DRAM 1 (remote!)&lt;/b&gt;&lt;/font&gt;" style="text;html=1;fontSize=11;align=left;" vertex="1" parent="1">
+          <mxGeometry x="65" y="485" width="350" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="b_restore_title" value="&lt;b&gt;from_cache() → dispatch to GPU&lt;/b&gt;" style="text;html=1;fontSize=12;align=left;" vertex="1" parent="1">
+          <mxGeometry x="65" y="515" width="280" height="25" as="geometry"/>
+        </mxCell>
+        <mxCell id="b_restore_flow" value="&lt;font color=&quot;#CC0000&quot;&gt;&lt;b&gt;DRAM 1&lt;/b&gt;&lt;/font&gt; → UPI → CPU 0 → PCIe → GPU 0 &lt;font color=&quot;#CC0000&quot;&gt;(crosses UPI!)&lt;/font&gt;" style="text;html=1;fontSize=11;align=left;" vertex="1" parent="1">
+          <mxGeometry x="65" y="545" width="500" height="20" as="geometry"/>
+        </mxCell>
+
+        <!-- Summary before -->
+        <mxCell id="b_summary" value="&lt;b&gt;Result:&lt;/b&gt; Higher inference latency, slower cache restore,&lt;br&gt;unpredictable memory placement" style="text;html=1;fontSize=11;align=center;fontColor=#CC0000;" vertex="1" parent="1">
+          <mxGeometry x="80" y="610" width="400" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- ============ AFTER ============ -->
+        <mxCell id="after_box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;opacity=15;arcSize=5;" vertex="1" parent="1">
+          <mxGeometry x="710" y="70" width="640" height="700" as="geometry"/>
+        </mxCell>
+        <mxCell id="after_title" value="&lt;b&gt;AFTER — NUMA-Aware Affinity&lt;/b&gt;" style="text;html=1;fontSize=16;align=center;fontColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="830" y="30" width="400" height="35" as="geometry"/>
+        </mxCell>
+
+        <!-- NUMA Node 0 after -->
+        <mxCell id="a_n0" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=2;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="730" y="120" width="280" height="220" as="geometry"/>
+        </mxCell>
+        <mxCell id="a_n0_label" value="&lt;b&gt;NUMA Node 0&lt;/b&gt;" style="text;html=1;fontSize=11;align=center;" vertex="1" parent="1">
+          <mxGeometry x="810" y="125" width="120" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="a_cpu0" value="Cores 0-15" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="750" y="155" width="100" height="35" as="geometry"/>
+        </mxCell>
+        <mxCell id="a_mem0" value="DRAM 0" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="880" y="155" width="100" height="35" as="geometry"/>
+        </mxCell>
+        <mxCell id="a_gpu01" value="GPU 0-3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="790" y="280" width="160" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="a_pcie0" style="strokeWidth=1;strokeColor=#82b366;" edge="1" parent="1" source="a_cpu0" target="a_gpu01"><mxGeometry relative="1" as="geometry"/></mxCell>
+
+        <!-- NUMA Node 1 after -->
+        <mxCell id="a_n1" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=1;arcSize=8;opacity=40;" vertex="1" parent="1">
+          <mxGeometry x="1050" y="120" width="280" height="220" as="geometry"/>
+        </mxCell>
+        <mxCell id="a_n1_label" value="&lt;b&gt;NUMA Node 1&lt;/b&gt;" style="text;html=1;fontSize=11;align=center;fontColor=#999999;" vertex="1" parent="1">
+          <mxGeometry x="1130" y="125" width="120" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="a_cpu1" value="Cores 16-31" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;opacity=40;" vertex="1" parent="1">
+          <mxGeometry x="1070" y="155" width="100" height="35" as="geometry"/>
+        </mxCell>
+        <mxCell id="a_mem1" value="DRAM 1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;opacity=40;" vertex="1" parent="1">
+          <mxGeometry x="1200" y="155" width="100" height="35" as="geometry"/>
+        </mxCell>
+        <mxCell id="a_gpu45" value="GPU 4-7" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;opacity=40;" vertex="1" parent="1">
+          <mxGeometry x="1110" y="280" width="160" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- ModelActor after — pinned to node 0 -->
+        <mxCell id="a_actor" value="&lt;b&gt;ModelActor&lt;/b&gt; (GPU 0-3)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;strokeWidth=2;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="830" y="380" width="200" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- Good path: threads pinned to local cores -->
+        <mxCell id="a_good1" value="" style="edgeStyle=orthogonalEdgeStyle;strokeWidth=3;strokeColor=#009900;" edge="1" parent="1" source="a_actor" target="a_cpu0">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="800" y="400"/>
+              <mxPoint x="800" y="173"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="a_good1_label" value="&lt;font color=&quot;#009900&quot;&gt;&lt;b&gt;sched_setaffinity()&lt;br&gt;→ local cores only&lt;/b&gt;&lt;/font&gt;" style="text;html=1;fontSize=10;align=center;" vertex="1" parent="1">
+          <mxGeometry x="730" y="370" width="140" height="35" as="geometry"/>
+        </mxCell>
+
+        <!-- Good path: memory pinned to local DRAM -->
+        <mxCell id="a_good2" value="" style="edgeStyle=orthogonalEdgeStyle;strokeWidth=3;strokeColor=#009900;" edge="1" parent="1" source="a_actor" target="a_mem0">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="930" y="400"/>
+              <mxPoint x="930" y="173"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="a_good2_label" value="&lt;font color=&quot;#009900&quot;&gt;&lt;b&gt;numa_set_preferred()&lt;br&gt;→ local DRAM only&lt;/b&gt;&lt;/font&gt;" style="text;html=1;fontSize=10;align=center;" vertex="1" parent="1">
+          <mxGeometry x="930" y="370" width="150" height="35" as="geometry"/>
+        </mxCell>
+
+        <!-- to_cache improvement -->
+        <mxCell id="a_cache_box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=1;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="730" y="450" width="600" height="130" as="geometry"/>
+        </mxCell>
+        <mxCell id="a_cache_title" value="&lt;b&gt;to_cache() → .cpu()&lt;/b&gt;" style="text;html=1;fontSize=12;align=left;" vertex="1" parent="1">
+          <mxGeometry x="745" y="455" width="200" height="25" as="geometry"/>
+        </mxCell>
+        <mxCell id="a_cache_flow" value="GPU 0 weights → .cpu() → &lt;font color=&quot;#009900&quot;&gt;&lt;b&gt;DRAM 0 (local!)&lt;/b&gt;&lt;/font&gt;" style="text;html=1;fontSize=11;align=left;" vertex="1" parent="1">
+          <mxGeometry x="745" y="485" width="350" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="a_restore_title" value="&lt;b&gt;from_cache() → dispatch to GPU&lt;/b&gt;" style="text;html=1;fontSize=12;align=left;" vertex="1" parent="1">
+          <mxGeometry x="745" y="515" width="280" height="25" as="geometry"/>
+        </mxCell>
+        <mxCell id="a_restore_flow" value="&lt;font color=&quot;#009900&quot;&gt;&lt;b&gt;DRAM 0&lt;/b&gt;&lt;/font&gt; → PCIe → GPU 0 &lt;font color=&quot;#009900&quot;&gt;(direct local path!)&lt;/font&gt;" style="text;html=1;fontSize=11;align=left;" vertex="1" parent="1">
+          <mxGeometry x="745" y="545" width="400" height="20" as="geometry"/>
+        </mxCell>
+
+        <!-- Summary after -->
+        <mxCell id="a_summary" value="&lt;b&gt;Result:&lt;/b&gt; Lower inference latency, faster cache restore,&lt;br&gt;deterministic NUMA-local memory placement" style="text;html=1;fontSize=11;align=center;fontColor=#009900;" vertex="1" parent="1">
+          <mxGeometry x="780" y="610" width="400" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- ============ Code callouts at bottom ============ -->
+        <mxCell id="code_title" value="&lt;b&gt;Key Code Changes (best-effort, all operations are no-ops on failure)&lt;/b&gt;" style="text;html=1;fontSize=13;align=center;" vertex="1" parent="1">
+          <mxGeometry x="350" y="680" width="500" height="25" as="geometry"/>
+        </mxCell>
+        <mxCell id="code1" value="&lt;font face=&quot;monospace&quot; style=&quot;font-size:10px&quot;&gt;__init__: apply_numa_affinity(gpu_indices) → sched_setaffinity + numa_set_preferred&lt;br&gt;to_cache: set_memory_policy_preferred(node_id) → .cpu() allocates on local DRAM&lt;br&gt;from_cache: apply_numa_affinity(new_gpus) → re-pin for potentially different GPUs&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=10;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="200" y="710" width="700" height="55" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
