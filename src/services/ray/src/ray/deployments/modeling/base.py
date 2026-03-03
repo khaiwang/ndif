@@ -39,7 +39,7 @@ from ...nn.security.protected_environment import (
     Protector,
 )
 from .util import kill_thread, load_with_cache_deletion_retry, remove_accelerate_hooks
-from ....numa import apply_numa_affinity
+from ...numa import apply_numa_affinity
 
 
 class BaseModelDeployment:
@@ -139,7 +139,7 @@ class BaseModelDeployment:
 
         # Set memory policy before .cpu() so host memory lands on NUMA-local banks
         if self._numa_node_ids and len(self._numa_node_ids) == 1:
-            from ....numa import set_memory_policy_preferred
+            from ...numa import set_memory_policy_preferred
 
             set_memory_policy_preferred(next(iter(self._numa_node_ids)))
 

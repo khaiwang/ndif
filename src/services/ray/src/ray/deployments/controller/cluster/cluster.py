@@ -88,15 +88,13 @@ class Cluster:
                     * self.model_cache_percentage
                 )
 
-                # Extract NUMA topology if reported by the node
+                # Reconstruct GPU-to-NUMA mapping from individual numeric
+                # resources named "numa_gpu_<idx>" (value = numa_node_id + 1).
                 gpu_to_numa = {}
-                numa_topo = node.resources_total.get("numa_topology")
-                if isinstance(numa_topo, dict):
-                    raw = numa_topo.get("gpu_to_numa", {})
-                    # Keys may be strings from JSON; normalize to int
-                    gpu_to_numa = {
-                        int(k): int(v) for k, v in raw.items()
-                    }
+                for key, val in node.resources_total.items():
+                    if key.startswith("numa_gpu_"):
+                        gpu_idx = int(key[len("numa_gpu_"):])
+                        gpu_to_numa[gpu_idx] = int(val) - 1
 
                 self.nodes[id] = Node(
                     id,

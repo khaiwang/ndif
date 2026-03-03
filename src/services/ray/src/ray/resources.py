@@ -30,16 +30,6 @@ def get_total_cudamemory_bytes(return_ids=False) -> int:
     return int(cudamemory)
 
 
-def get_numa_topology() -> dict:
-    """Return GPU-to-NUMA mapping for resource reporting.
-
-    Returns a dict like {"gpu_to_numa": {0: 0, 1: 0, 2: 1, 3: 1}}.
-    Returns an empty mapping if NUMA info is unavailable.
-    """
-    gpu_count = torch.cuda.device_count()
-    return {"gpu_to_numa": get_gpu_numa_mapping(gpu_count)}
-
-
 def main(head: bool, name: str = None):
     resources = {}
 
@@ -48,7 +38,15 @@ def main(head: bool, name: str = None):
 
     resources["cuda_memory_bytes"] = get_total_cudamemory_bytes()
     resources["cpu_memory_bytes"] = get_available_cpu_memory_bytes()
-    resources["numa_topology"] = get_numa_topology()
+
+    # Encode GPU-to-NUMA mapping as individual numeric resources.
+    # Ray resources must be numeric, so we use "numa_gpu_<idx>: <node_id + 1>"
+    # (offset by 1 so that NUMA node 0 maps to value 1; value 0 would be
+    # ignored by Ray as "no resource").
+    gpu_count = torch.cuda.device_count()
+    gpu_to_numa = get_gpu_numa_mapping(gpu_count)
+    for gpu_idx, numa_node_id in gpu_to_numa.items():
+        resources[f"numa_gpu_{gpu_idx}"] = numa_node_id + 1
 
     if name is not None:
         resources[name] = 10
