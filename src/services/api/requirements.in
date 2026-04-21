@@ -27,8 +27,8 @@ eventlet
 boto3
 # Tasks
 ray[serve]==2.50.0
+grpcio<1.80
 requests
 torch
 python-slugify
 influxdb-client
-nnsight

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import inspect
+import threading
 from functools import wraps
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, Callable, Dict, List
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 from pydantic import BaseModel
 
-from nnsight.util import Patch, Patcher
 from nnsight.modeling.mixins.remoteable import StreamTracer
 
 # Built-in functions and types that are allowed to be used
@@ -157,9 +157,6 @@ WHITELISTED_BUILTINS = {
     "vars",
     "zip",
     "memoryview",
-    "globals",
-    "input",
-    "eval",
 }
 
 SAFE_BUILTINS = {
@@ -198,9 +195,9 @@ class WhitelistedModule(BaseModel):
         )
 
 
-# Modules that are allowed to be imported
+# Modules that are allowed to be imported. ``import builtins`` is handled
+# separately by ``Importer.__call__`` returning ``PROTECTED_BUILTINS``.
 WHITELISTED_MODULES = [
-    WhitelistedModule(name="builtins", strict=True),
     WhitelistedModule(name="torch", strict=False),
     WhitelistedModule(name="collections", strict=False),
     WhitelistedModule(name="nnsight.intervention.envoy", strict=False),
@@ -228,7 +225,9 @@ WHITELISTED_MODULES_DESERIALIZATION = [
     WhitelistedModule(name="nnsight.intervention.tracing.base", strict=True),
     WhitelistedModule(name="nnsight.intervention.interleaver", strict=True),
     WhitelistedModule(name="nnsight.intervention.batching", strict=True),
+    WhitelistedModule(name="nnsight.intervention.serialization", strict=True),
     WhitelistedModule(name="nnsight.modeling", strict=False),
+    WhitelistedModule(name="transformers", strict=False),
     *WHITELISTED_MODULES,
 ]
 
@@ -259,15 +258,106 @@ class ProtectedModule(ModuleType):
         return protected
 
 
-class Importer:
-    """Handles importing modules while enforcing whitelist rules."""
+# ======================================================================
+# Thread-local sandbox dispatch
+# ======================================================================
+# A process-global ``__import__`` dispatcher is installed at module import.
+# Threads with no active Protector pass through to the original ``__import__``.
+# Threads inside a Protector scope set ``_tls.active`` and route imports
+# through the whitelist.
 
-    def __init__(
-        self, whitelisted_modules: List[WhitelistedModule], protector: "Protector"
-    ):
+_tls = threading.local()
+
+
+def _builtins_dict() -> dict:
+    """Return the underlying builtins dict in a way that works whether
+    ``__builtins__`` is bound to the module (modules) or the dict
+    (``__main__`` / many internal frames)."""
+    b = __builtins__
+    return b if isinstance(b, dict) else b.__dict__
+
+
+_BUILTINS = _builtins_dict()
+_ORIGINAL_IMPORT = _BUILTINS["__import__"]
+
+
+def _dispatching_import(
+    name: str,
+    globals: Optional[Dict[str, Any]] = None,
+    locals: Optional[Dict[str, Any]] = None,
+    fromlist: Optional[List[str]] = None,
+    level: int = 0,
+):
+    """Process-global ``__import__`` replacement. Thread-local fast path:
+    unsandboxed threads incur one attribute lookup + one function call
+    before reaching the original import."""
+    active = getattr(_tls, "active", None)
+    if active is None:
+        return _ORIGINAL_IMPORT(name, globals, locals, fromlist, level)
+    return active._importer(name, globals, locals, fromlist, level)
+
+
+def _install_dispatch_once():
+    """Idempotent install. Safe to call multiple times — the dispatcher is
+    re-assigned but the original is captured only once."""
+    _BUILTINS["__import__"] = _dispatching_import
+    # PROTECTED_BUILTINS exposes only whitelisted names; keep its
+    # ``__import__`` consistent so user code that looks up the builtin
+    # explicitly still lands in the dispatcher.
+    SAFE_BUILTINS["__import__"] = _dispatching_import
+
+
+_install_dispatch_once()
+
+
+# ``StreamTracer.execute`` runs pickle/cloudpickle internals that do their
+# own imports. Bypass the sandbox for the duration of that call so the
+# stream path isn't whitelist-bound. Installed once; the wrapper is cheap
+# when no Protector is active.
+_orig_stream_execute = StreamTracer.execute
+
+
+def _unsandboxed_stream_execute(self, *args, **kwargs):
+    saved = getattr(_tls, "active", None)
+    _tls.active = None
+    try:
+        return _orig_stream_execute(self, *args, **kwargs)
+    finally:
+        _tls.active = saved
+
+
+StreamTracer.execute = _unsandboxed_stream_execute
+
+
+# Modules that no allowlist may grant access to, even transitively. Each
+# exposes a direct escape that ``ProtectedModule`` cannot contain:
+#   * sys, importlib  — module-table introspection
+#   * threading       — child threads start with no TLS
+#   * subprocess, os  — FS / process control
+#   * ctypes          — FFI / arbitrary memory
+NEVER_ALLOWED = frozenset(
+    {"sys", "importlib", "threading", "subprocess", "os", "ctypes"}
+)
+
+
+class Importer:
+    """Whitelist-gated module resolver. Invoked only for threads with an
+    active Protector (via the ``_dispatching_import`` fast path)."""
+
+    def __init__(self, whitelisted_modules: List[WhitelistedModule]):
         self.whitelisted_modules = whitelisted_modules
-        self.protector = protector
-        self.original_import = __builtins__["__import__"]
+
+    def _real_import(self, *args, **kwargs):
+        """Call the real ``__import__`` with the sandbox temporarily
+        disabled on this thread. The real importer itself does nested
+        imports (submodules, from-imports) and must not loop back through
+        the whitelist."""
+        saved = getattr(_tls, "active", None)
+        _tls.active = None
+        try:
+            return _ORIGINAL_IMPORT(*args, **kwargs)
+        finally:
+            _tls.active = saved
 
     def __call__(
         self,
@@ -277,97 +367,148 @@ class Importer:
         fromlist: List[str] = None,
         level: int = 0,
     ):
-        if name in ["builtins", "__builtins__"]:
+        if name in ("builtins", "__builtins__"):
             return PROTECTED_BUILTINS
 
+        # Hard block. Evaluated before the allowlist so it wins
+        # unconditionally.
+        if level == 0 and name.split(".", 1)[0] in NEVER_ALLOWED:
+            raise ImportError(f"Module {name} is not permitted")
+
         if level > 0:
-            self.protector.__exit__(None, None, None)
-
-            try:
-                result = self.original_import(name, globals, locals, fromlist, level)
-
-            finally:
-                self.protector.__enter__()
-
+            # Relative import — resolve first, then whitelist the result.
+            result = self._real_import(name, globals, locals, fromlist, level)
+            if result.__name__.split(".", 1)[0] in NEVER_ALLOWED:
+                raise ImportError(f"Module {result.__name__} is not permitted")
             for module in self.whitelisted_modules:
                 if module.check(result.__name__):
                     protected = ProtectedModule(module)
                     protected.__dict__.update(result.__dict__)
                     return protected
-
             raise ImportError(f"Module {result.__name__} is not whitelisted")
 
         for module in self.whitelisted_modules:
             if module.check(name):
-                self.protector.__exit__(None, None, None)
-
-                try:
-                    result = self.original_import(
-                        name, globals, locals, fromlist, level
-                    )
-                    protected = ProtectedModule(module)
-                    protected.__dict__.update(result.__dict__)
-                    return protected
-                finally:
-                    self.protector.__enter__()
+                result = self._real_import(name, globals, locals, fromlist, level)
+                protected = ProtectedModule(module)
+                protected.__dict__.update(result.__dict__)
+                return protected
 
         raise ImportError(f"Module {name} is not whitelisted")
 
 
-class Protector(Patcher):
-    """Enforces security restrictions on Python's built-ins and imports."""
+# Builtins that user intervention code must never call. Shadowed in the
+# user frame's globals: Python name resolution is locals → globals →
+# builtins, so a global-level binding intercepts before the frame's
+# bound builtins fire.
+_SHADOWED_BUILTINS = ("eval", "exec", "open", "compile")
+_NO_PRIOR = object()
+
+
+def _make_blocker(name: str):
+    def _blocked(*args, **kwargs):
+        raise PermissionError(
+            f"Builtin `{name}` is not permitted in the sandboxed scope"
+        )
+
+    _blocked.__name__ = f"_blocked_{name}"
+    return _blocked
+
+
+class _ProtectorScope:
+    """Per-invocation scope for the factory form ``protector(target_globals)``.
+
+    On enter:
+      * ``_tls.active = protector`` — the global ``__import__`` dispatcher
+        routes this thread's imports through the allowlist.
+      * Each name in ``_SHADOWED_BUILTINS`` is bound to a blocker in
+        ``target_globals``.
+
+    On exit both are undone in LIFO. The same ``Protector`` instance can
+    be entered concurrently on multiple mediator threads: all per-call
+    state lives on the scope object.
+    """
+
+    __slots__ = ("_protector", "_target_globals", "_prev_active", "_prev_shadows")
 
     def __init__(
-        self, whitelisted_modules: List[WhitelistedModule], builtins: bool = False
+        self, protector: "Protector", target_globals: Optional[Dict[str, Any]]
     ):
-        super().__init__()
-        self.importer = Importer(whitelisted_modules, self)
+        self._protector = protector
+        self._target_globals = target_globals
+        self._prev_active = None
+        self._prev_shadows: Optional[Dict[str, Any]] = None
 
-        # Patch __import__ to use our custom importer
-        self.add(
-            Patch(
-                __builtins__,
-                replacement=self.importer.__call__,
-                key="__import__",
-                as_dict=True,
-            )
-        )
+    def __enter__(self):
+        self._prev_active = getattr(_tls, "active", None)
+        _tls.active = self._protector
 
-        self.add(
-            Patch(
-                SAFE_BUILTINS,
-                replacement=self.importer.__call__,
-                key="__import__",
-                as_dict=True,
-            )
-        )
+        g = self._target_globals
+        if g is not None:
+            prev: Dict[str, Any] = {}
+            for name in _SHADOWED_BUILTINS:
+                prev[name] = g.get(name, _NO_PRIOR)
+                g[name] = _make_blocker(name)
+            self._prev_shadows = prev
+        return self
 
-        self.add(
-            Patch(
-                StreamTracer,
-                replacement=self.escape(StreamTracer.execute),
-                key="execute",
-            )
-        )
-
-        # Remove non-whitelisted built-ins
-        if builtins:
-            for key in __builtins__.keys():
-                if key not in WHITELISTED_BUILTINS:
-                    self.add(Patch(__builtins__, key=key, as_dict=True))
-
-    def escape(self, fn: Callable):
-        @wraps(fn)
-        def inner(*args, **kwargs):
-            self.__exit__(None, None, None)
-            try:
-                return fn(*args, **kwargs)
-            finally:
-                self.__enter__()
-
-        return inner
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        g = self._target_globals
+        if g is not None and self._prev_shadows is not None:
+            for name, prev in self._prev_shadows.items():
+                if prev is _NO_PRIOR:
+                    g.pop(name, None)
+                else:
+                    g[name] = prev
+        _tls.active = self._prev_active
+        return False
 
 
+class Protector:
+    """Thread-local sandbox policy.
+
+    Two usage patterns:
+
+    1. Context manager — ``with Protector(modules):`` scopes TLS to the
+       calling thread (so this thread's imports route through the
+       allowlist via the global ``__import__`` dispatcher). Used on code
+       paths where *we own* the code (deserialization, orchestration)
+       and only need import restriction.
+
+    2. Factory — ``scope = protector(target_globals); with scope: ...``
+       activates TLS *and* shadows risky builtins
+       (``open``/``eval``/``exec``/``compile``) in ``target_globals``
+       via per-name dict writes. Intended for wrapping *user* code
+       frames (nnsight's ``worker_context`` hook).
+    """
+
+    def __init__(self, whitelisted_modules: List[WhitelistedModule]):
+        self.whitelisted_modules = whitelisted_modules
+        self._importer = Importer(whitelisted_modules)
+
+    # -- Context-manager form: TLS only --------------------------------
+    # Previous-active is tracked on a per-thread stack so the same
+    # Protector instance can be entered concurrently on multiple threads.
+    def __enter__(self):
+        stack = getattr(_tls, "_stack", None)
+        if stack is None:
+            stack = []
+            _tls._stack = stack
+        stack.append(getattr(_tls, "active", None))
+        _tls.active = self
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        _tls.active = _tls._stack.pop()
+        return False
+
+    # -- Factory form: worker_context(target_globals) → scope ----------
+    def __call__(self, target_globals: Optional[Dict[str, Any]]) -> _ProtectorScope:
+        return _ProtectorScope(self, target_globals)
+
+
+# Bind the real ``compile`` onto ``ast`` so source-based deserialization
+# can reach it as ``ast.compile``.
 import ast
 
 setattr(ast, "compile", compile)

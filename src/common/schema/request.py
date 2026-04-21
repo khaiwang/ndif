@@ -64,7 +64,11 @@ class BackendRequestModel(ObjectStorageMixin):
         if isinstance(self.request, ray.ObjectRef):
             request = ray.get(request)
 
-        return RequestModel.deserialize(model, request, self.zlib)
+        return RequestModel.deserialize(
+            request,
+            model._remoteable_persistent_objects(),
+            self.zlib,
+        )
 
     @classmethod
     def from_request(cls, request: Request) -> Self:
@@ -87,7 +91,9 @@ class BackendRequestModel(ObjectStorageMixin):
             request=request.body(),
             model_key=model_key,
             session_id=headers.get("ndif-session_id", None),
-            zlib=headers.get("nnsight-zlib", True),
+            zlib=(
+                headers.get("nnsight-compress", headers.get("nnsight-zlib", "True")).lower() == "true"
+            ),
             last_status_time=sent,
             api_key=headers.get("ndif-api-key"),
             callback=headers.get("ndif-callback", ""),
@@ -112,8 +118,6 @@ class BackendRequestModel(ObjectStorageMixin):
         logging_level = "info"
 
         if status == ResponseModel.JobStatus.ERROR:
-            logging_level = "exception"
-        elif status == ResponseModel.JobStatus.NNSIGHT_ERROR:
             logging_level = "exception"
 
         response = BackendResponseModel(

@@ -13,12 +13,22 @@ from .util import controller_handle, get_actor_handle, submit
 
 logger = logging.getLogger("ndif")
 
+# Max concurrent __call__s the Processor will have in flight against
+# the Ray ModelActor. Must match ModelActor's @ray.remote
+# max_concurrency so the actor can accept them all without queuing
+# at the Ray transport layer.
+MAX_INFLIGHT = int(os.environ.get("NDIF_ACTOR_MAX_CONCURRENCY", "32"))
+
 
 class ProcessorStatus(Enum):
     UNINITIALIZED = "uninitialized"
     PROVISIONING = "provisioning"
     DEPLOYING = "deploying"
     READY = "ready"
+    # BUSY now means error-locked (awaiting dispatcher clearance), not
+    # "currently executing a request". With cross-request batching,
+    # the Processor may have many requests in flight concurrently while
+    # remaining READY.
     BUSY = "busy"
     CANCELLED = "cancelled"
 
@@ -54,8 +64,12 @@ class Processor:
         self.status_changed_at: float = 0  # Timestamp of last status change
 
         self.dedicated = None
-        self.current_request_id: Optional[str] = None
-        self.current_request_started_at: Optional[float] = None  # When current request started executing
+        # Backpressure + observability for in-flight requests against the
+        # Ray ModelActor. Semaphore caps fan-out to MAX_INFLIGHT; requests
+        # wait in self.queue once the semaphore is exhausted.
+        self._inflight_sem = asyncio.Semaphore(MAX_INFLIGHT)
+        self.inflight_request_ids: set[str] = set()
+        self.inflight_started_at: dict[str, float] = {}
 
     @property
     def status(self) -> ProcessorStatus:
@@ -236,10 +250,6 @@ class Processor:
     async def execute(self, request: BackendRequestModel) -> None:
         """Submit a request to the model deployment and update the user with the status."""
 
-        # Track the currently executing request
-        self.current_request_id = request.id
-        self.current_request_started_at = time.time()
-
         try:
             # Get the handle for the model deployment.
             handle = self.handle
@@ -276,17 +286,26 @@ class Processor:
                 )
                 self.status = ProcessorStatus.CANCELLED
             else:
-                # If there is another error, add it ot the error queue to be handled by the dispatcher. Remain busy until the dispatcher has cleared the error.
+                # If there is another error, add it to the error queue to be handled by the dispatcher. Lock into BUSY until the dispatcher clears the error.
+                self.status = ProcessorStatus.BUSY
                 self.error_queue.put_nowait((self.model_key, e))
 
-        # Otherwise the processor is ready to accept new requests.
-        else:
-            self.status = ProcessorStatus.READY
+    async def _run(self, request: BackendRequestModel) -> None:
+        """Run a request to completion and release its in-flight slot.
 
-        # Clear the current request tracking when done (success or error)
+        Spawned from ``processor_worker`` via ``asyncio.create_task``; this
+        is what actually lets the Processor keep many requests in flight
+        concurrently. The semaphore slot is acquired before spawning and
+        released here in the finally block.
+        """
+        self.inflight_request_ids.add(request.id)
+        self.inflight_started_at[request.id] = time.time()
+        try:
+            await self.execute(request)
         finally:
-            self.current_request_id = None
-            self.current_request_started_at = None
+            self.inflight_request_ids.discard(request.id)
+            self.inflight_started_at.pop(request.id, None)
+            self._inflight_sem.release()
 
     async def processor_worker(self, provision: bool = True) -> None:
         """Main asyncio task for creating, monitoring and submitting requests to the a model deployment."""
@@ -328,13 +347,18 @@ class Processor:
             # Get the next request from the queue.
             request = await self.queue.get()
 
-            self.status = ProcessorStatus.BUSY
+            # Backpressure: wait if we already have MAX_INFLIGHT requests
+            # against the actor. When this blocks, subsequent requests
+            # pile up in self.queue (QUEUED from the user's perspective).
+            await self._inflight_sem.acquire()
 
             # Update the other users in the queue with their new position in the queue.
             self.reply()
 
-            # Submit the request to the model deployment.
-            await self.execute(request)
+            # Fire-and-forget: the task runs concurrently with the next
+            # iteration of this loop, so multiple requests can be in
+            # flight simultaneously against the actor.
+            asyncio.create_task(self._run(request))
 
     async def reply_worker(self) -> None:
         """Asyncio task for replying to users with status of model deploymentevery N seconds."""
@@ -397,7 +421,8 @@ class Processor:
             "status": self.status.value,
             "status_changed_at": self.status_changed_at,
             "request_ids": request_ids,
-            "current_request_id": self.current_request_id,
-            "current_request_started_at": self.current_request_started_at,
+            "inflight_request_ids": sorted(self.inflight_request_ids),
+            "inflight_count": len(self.inflight_request_ids),
+            "inflight_started_at": dict(self.inflight_started_at),
             "dedicated": self.dedicated,
         }

@@ -1,5 +1,7 @@
-nnsight
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch>=2.7,<2.11
 ray[serve]==2.50.0
+grpcio<1.80
 python-slugify
 # Telemetry
 prometheus_client

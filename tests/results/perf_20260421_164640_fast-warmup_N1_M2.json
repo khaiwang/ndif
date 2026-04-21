@@ -1,0 +1,63 @@
+{
+  "label": "fast-warmup",
+  "model_key": "Qwen/Qwen2.5-7B-Instruct",
+  "n_clients": 1,
+  "m_requests": 2,
+  "total_requests": 2,
+  "completed_requests": 2,
+  "errored_requests": 0,
+  "errors": [],
+  "wall_s": 7.162471532821655,
+  "throughput_req_s": 0.2792332214983478,
+  "per_req_dt_s": {
+    "min": 1.1425302028656006,
+    "median": 1.4116216897964478,
+    "mean": 1.4116216897964478,
+    "max": 1.680713176727295,
+    "stdev": 0.38055283033674653
+  },
+  "per_client_init_s": {
+    "min": 0.8650588989257812,
+    "max": 0.8650588989257812,
+    "mean": 0.8650588989257812
+  },
+  "clients": [
+    {
+      "client_idx": 0,
+      "init_s": 0.8650588989257812,
+      "client_span_s": 2.8232738971710205,
+      "per_req": [
+        {
+          "req_idx": 0,
+          "dt_s": 1.680713176727295,
+          "h0_shape": [
+            1,
+            1,
+            3584
+          ],
+          "last_shape": [
+            1,
+            1,
+            3584
+          ]
+        },
+        {
+          "req_idx": 1,
+          "dt_s": 1.1425302028656006,
+          "h0_shape": [
+            1,
+            1,
+            3584
+          ],
+          "last_shape": [
+            1,
+            1,
+            3584
+          ]
+        }
+      ],
+      "errors": []
+    }
+  ],
+  "timestamp": "20260421_164640"
+}

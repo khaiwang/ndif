@@ -1,10 +1,11 @@
 
 IP_ADDR := $(shell hostname -I | awk '{print $$1}')
 N_DEVICES := $(shell command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L | wc -l || echo 0)
+NNSIGHT_PATH ?= /disk/u/zikai/nnsight/.claude/worktrees/hf-serve
 
 build:
-	docker buildx build --build-arg NAME=api -t api:latest -f docker/Dockerfile .
-	docker buildx build --build-arg NAME=ray -t ray:latest -f docker/Dockerfile .
+	docker buildx build --build-context nnsight=$(NNSIGHT_PATH) --build-arg NAME=api -t api:latest -f docker/Dockerfile .
+	docker buildx build --build-context nnsight=$(NNSIGHT_PATH) --build-arg NAME=ray -t ray:latest -f docker/Dockerfile .
 
 up:
 	export HOST_IP=$(IP_ADDR) N_DEVICES=$(N_DEVICES) && \

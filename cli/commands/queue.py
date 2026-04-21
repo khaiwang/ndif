@@ -92,7 +92,7 @@ def format_queue_state_simple(queue_data: dict):
     processors = queue_data.get('processors', {})
     num_processors = len(processors)
     total_queue_depth = sum(len(p.get('request_ids', [])) for p in processors.values())
-    executing_requests = sum(1 for p in processors.values() if p.get('current_request_id') is not None)
+    executing_requests = sum(p.get('inflight_count', 0) for p in processors.values())
 
     click.echo("Queue Overview:")
     click.echo(f"  Active Processors: {num_processors}")
@@ -119,11 +119,11 @@ def _print_processor(processor: dict):
     """Print a single processor's state."""
     model_key = processor.get('model_key', 'unknown')
     status = processor.get('status', 'unknown')
-    current_request = processor.get('current_request_id')
+    inflight_ids = processor.get('inflight_request_ids', [])
+    inflight_started = processor.get('inflight_started_at', {})
     dedicated = processor.get('dedicated')
     request_ids = processor.get('request_ids', [])
     status_changed_at = processor.get('status_changed_at')
-    current_request_started_at = processor.get('current_request_started_at')
 
     # Extract repo_id from model_key for display
     repo_id = _extract_repo_id_from_model_key(model_key)
@@ -152,12 +152,18 @@ def _print_processor(processor: dict):
 
     click.echo(f"    Queue Depth: {len(request_ids)}")
 
-    if current_request:
-        exec_display = current_request
-        if current_request_started_at:
-            exec_duration = str(timedelta(seconds=int(time.time() - current_request_started_at)))
-            exec_display = f"{exec_display} (executing for {exec_duration})"
-        click.echo(f"    Currently Executing: {exec_display}")
+    if inflight_ids:
+        click.echo(f"    Currently Executing: {len(inflight_ids)}")
+        now = time.time()
+        for rid in inflight_ids[:3]:
+            started = inflight_started.get(rid)
+            if started:
+                dur = str(timedelta(seconds=int(now - started)))
+                click.echo(f"      - {rid} (for {dur})")
+            else:
+                click.echo(f"      - {rid}")
+        if len(inflight_ids) > 3:
+            click.echo(f"      ... (+{len(inflight_ids) - 3} more)")
 
     if request_ids:
         # Show first few request IDs
