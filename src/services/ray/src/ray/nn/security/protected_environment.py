@@ -297,17 +297,30 @@ def _dispatching_import(
     return active._importer(name, globals, locals, fromlist, level)
 
 
+_DISPATCH_INSTALLED = False
+
+
 def _install_dispatch_once():
     """Idempotent install. Safe to call multiple times — the dispatcher is
-    re-assigned but the original is captured only once."""
+    re-assigned but the original is captured only once.
+
+    Deferred to first ``Protector(...)`` construction (rather than running
+    at module import) because merely importing this module elsewhere in
+    the process tree (e.g. into the Ray client-server worker that
+    unpickles incoming RPC args) would otherwise hijack ``__import__``
+    process-wide. The worker only needs to deserialize plain Python
+    objects; routing its imports through our dispatcher serves no
+    purpose and leaks our hook to call sites that aren't actor code.
+    """
+    global _DISPATCH_INSTALLED
+    if _DISPATCH_INSTALLED:
+        return
     _BUILTINS["__import__"] = _dispatching_import
     # PROTECTED_BUILTINS exposes only whitelisted names; keep its
     # ``__import__`` consistent so user code that looks up the builtin
     # explicitly still lands in the dispatcher.
     SAFE_BUILTINS["__import__"] = _dispatching_import
-
-
-_install_dispatch_once()
+    _DISPATCH_INSTALLED = True
 
 
 # ``StreamTracer.execute`` runs pickle/cloudpickle internals that do their
@@ -509,6 +522,10 @@ class Protector:
     """
 
     def __init__(self, whitelisted_modules: List[WhitelistedModule]):
+        # Install the global ``__import__`` dispatcher on first Protector
+        # construction. Module import alone does not install — see
+        # ``_install_dispatch_once`` for why.
+        _install_dispatch_once()
         self.whitelisted_modules = whitelisted_modules
         self._importer = Importer(whitelisted_modules)
 

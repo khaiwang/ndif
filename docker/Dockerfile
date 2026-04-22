@@ -27,16 +27,12 @@ RUN uv pip install --system -r src/services/${NAME}/requirements.in \
     && find /usr/local/lib/python3.12 -name "*.a" -delete \
     && rm -rf /root/.cache
 
-# Override pypi nnsight with the local hf-serve worktree that ships
-# VanillaBatchServer (cross-request batching for LM deployments). When
-# the upstream nnsight release contains VanillaBatchServer, this layer
-# can be removed and pypi nnsight pinned in requirements.in instead.
-# See Makefile: --build-context nnsight=<host path>.
-RUN --mount=type=bind,from=nnsight,target=/tmp/nnsight-src \
-    cp -r /tmp/nnsight-src /tmp/nnsight && \
-    SETUPTOOLS_SCM_PRETEND_VERSION_FOR_NNSIGHT=0.6.3 \
-    uv pip install --system /tmp/nnsight && \
-    rm -rf /tmp/nnsight
+# NOTE: the nnsight package is installed from pypi by the requirements.in
+# layer above. At runtime, docker/docker-compose.yml bind-mounts the
+# local nnsight worktree (NNSIGHT_PATH) over the installed package
+# directory, so the running container uses the local hf-serve tree
+# (which ships VanillaBatchServer). When VanillaBatchServer reaches
+# pypi nnsight, the runtime mount can be dropped.
 
 SHELL ["/bin/bash", "-c"]
 CMD if [[ -n "${RAY_ADDRESS}" ]]; then \
