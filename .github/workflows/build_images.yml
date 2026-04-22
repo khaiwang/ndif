@@ -13,6 +13,7 @@ permissions:
   contents: read
 
 env:
+  # main -> prod ECR repo, everything else -> dev ECR repo
   ECS_REPO: ${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
 
 jobs:
@@ -36,7 +37,6 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # ---- API image ----
       - name: Tag the API image
         id: api
         uses: docker/metadata-action@v5
@@ -45,7 +45,7 @@ jobs:
             ${{ steps.login-ecr.outputs.registry }}/${{ env.ECS_REPO }}/api
           tags: |
             type=sha
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest
 
       - name: Build and push API service image
         uses: docker/build-push-action@v5
@@ -61,7 +61,6 @@ jobs:
             type=registry,ref=${{ steps.login-ecr.outputs.registry }}/dev/api:cache
           cache-to: type=registry,ref=${{ steps.login-ecr.outputs.registry }}/dev/api:cache,mode=max
 
-      # ---- Ray image ----
       - name: Tag the Ray image
         id: ray
         uses: docker/metadata-action@v5
@@ -101,8 +100,8 @@ jobs:
       - name: Deploy with AWS CLI
         run: |
           aws ecs update-service \
-            --cluster Prod \
-            --service API \
-            --deployment-configuration minimumHealthyPercent=0,maximumPercent=100 \
-            --force-new-deployment \
-            --no-cli-pager
+          --cluster NDIF-Prod \
+          --service API \
+          --deployment-configuration minimumHealthyPercent=0,maximumPercent=100 \
+          --force-new-deployment \
+          --no-cli-pager

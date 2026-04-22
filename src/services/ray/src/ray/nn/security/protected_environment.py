@@ -480,6 +480,32 @@ class Protector:
        (``open``/``eval``/``exec``/``compile``) in ``target_globals``
        via per-name dict writes. Intended for wrapping *user* code
        frames (nnsight's ``worker_context`` hook).
+
+    Deliberately omitted features
+    -----------------------------
+    Upstream dev's ``Protector`` (in ``protector.py`` / ``importer.py``)
+    additionally:
+      * strips non-whitelisted names from the real ``builtins`` dict
+        for the duration of the scope (its ``builtins=True`` mode);
+      * patches ``cloudpickle.subimport`` / ``CustomCloudUnpickler.find_class``
+        to close pickle's import-bypass holes;
+      * inserts a ``SandboxFinder`` into ``sys.meta_path`` to block
+        C-level imports;
+      * replaces real ``compile`` / ``exec`` with restricted versions.
+
+    Each of those is implemented via ``nnsight.util.Patcher``, which
+    saves the previous value on ``__enter__`` and restores on
+    ``__exit__``. Under our batched execution path multiple
+    ``Protector`` scopes can be active concurrently on different
+    mediator threads; the save/restore dance against shared process
+    state then races (see ``docs/TODO_batched_security_layers.md``
+    for a worked example).
+
+    The builtins-stripping case is structurally process-global and
+    cannot be made TLS-safe. The other layers can be ported to an
+    install-once + per-call TLS-gate pattern but that work is
+    intentionally deferred to a follow-up PR so this branch can ship
+    batching without security regressions or hidden races.
     """
 
     def __init__(self, whitelisted_modules: List[WhitelistedModule]):
