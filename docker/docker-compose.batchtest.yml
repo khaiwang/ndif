@@ -1,0 +1,13 @@
+services:
+  ray:
+    environment:
+      # Batching enabled: default (32) in code; leaving this unset would
+      # also work. Pinning to 32 explicitly for clarity.
+      - NDIF_MAX_CONCURRENCY=32
+    deploy:
+      resources:
+        reservations:
+          devices: !override
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [ gpu ]

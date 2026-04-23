@@ -502,7 +502,7 @@ class BaseModelDeployment:
             span.add_event("deserializing_request")
             with Protector(WHITELISTED_MODULES_DESERIALIZATION):
                 req_model = RequestModel.deserialize(
-                    raw, self.persistent_objects, request.zlib
+                    raw, self.persistent_objects, request.compress
                 )
 
             return req_model

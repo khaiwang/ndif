@@ -37,6 +37,14 @@ This is the minimal safe default while batching is in scope. The rest of
 this doc describes why the upstream design breaks under batching and what
 a proper fix looks like when we're ready to build it.
 
+The `SET_ATTRS` dict and `clear_set_attrs()` helper are **kept in tree**
+but dormant, gated behind a `_exclusive_mode` `threading.Event`. Default
+state: event cleared, writes refused. When the quiesce-then-exclusive
+coordinator described below ships, enabling writes is just a matter of
+setting the event after the batch drain completes. The rollback indexing
+bug that made upstream's `clear_set_attrs` unreliable (keyed by raw
+module id instead of wrapper id) is fixed in this branch.
+
 ## Why mutate-then-rollback breaks batching
 
 `VanillaBatchServer` fuses N concurrent requests into a single forward
@@ -65,11 +73,11 @@ users until rollback.
 ## Current policy (enforced)
 
 - `ProtectedObject.__setattr__` raises `AttributeError` on any write to
-  a protected module after `__init__`.
+  a protected module after `__init__` **unless `_exclusive_mode` is set**.
 - User intervention code that tries `module.some_attr = value` will fail
   loudly at the point of attempted write.
-- No `SET_ATTRS` machinery, no `clear_set_attrs()` call, no rollback
-  needed — because nothing ever changes.
+- `SET_ATTRS` stays empty by default (nothing is ever mutated), so
+  `clear_set_attrs()` is a no-op on the refuse path.
 
 This is strictly safer than upstream's mutate-then-rollback when
 concurrent users share an actor. Cost is a slightly smaller

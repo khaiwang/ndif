@@ -61,7 +61,7 @@ PROMPTS = [
 
 def _configure_client():
     nnsight.CONFIG.set_default_api_key("api key")
-    nnsight.CONFIG.API.HOST = "http://localhost:5001"
+    nnsight.CONFIG.API.HOST = os.environ.get("NDIF_HOST", "http://localhost:5001")
     nnsight.CONFIG.API.COMPRESS = False
 
 

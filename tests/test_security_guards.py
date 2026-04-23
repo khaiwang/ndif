@@ -875,25 +875,46 @@ class TestProtectedObjects:
         assert isinstance(wrapped, torch.nn.Module)
         assert isinstance(wrapped, torch.nn.Linear)
 
-    @pytest.mark.xfail(
-        reason="Pre-existing bug: clear_set_attrs looks up by original obj id "
-               "but SET_ATTRS is keyed by wrapper id",
-        strict=True,
-    )
-    def test_clear_set_attrs(self):
-        from src.services.ray.src.ray.nn.security.protected_objects import (
-            protect,
-            clear_set_attrs,
-        )
+    def test_setattr_refused_by_default(self):
+        """Default posture: writes to a protected module are refused.
+
+        Upstream's mutate-then-rollback is unsafe under batching because
+        the real shared module is mutated synchronously, corrupting
+        co-batched peers before rollback can land. See
+        ``docs/TODO_batched_attr_writes.md``.
+        """
+        from src.services.ray.src.ray.nn.security.protected_objects import protect
 
         module = torch.nn.Linear(10, 10)
         wrapped = protect(module)
 
-        original_training = module.training
-        wrapped.training = not original_training
-        assert module.training != original_training
+        with pytest.raises(AttributeError, match="cannot be set after initialization"):
+            wrapped.training = not module.training
 
-        clear_set_attrs()
+    def test_exclusive_mode_write_and_rollback(self):
+        """When ``_exclusive_mode`` is set (batch drained, single request),
+        writes are permitted and recorded for rollback via
+        ``clear_set_attrs()``. The actor-side coordinator that enters this
+        mode has not shipped yet — this test pins the dormant machinery.
+        """
+        from src.services.ray.src.ray.nn.security.protected_objects import (
+            protect,
+            clear_set_attrs,
+            _exclusive_mode,
+        )
+
+        module = torch.nn.Linear(10, 10)
+        wrapped = protect(module)
+        original_training = module.training
+
+        _exclusive_mode.set()
+        try:
+            wrapped.training = not original_training
+            assert module.training != original_training
+        finally:
+            clear_set_attrs()
+            _exclusive_mode.clear()
+
         assert module.training == original_training
 
 

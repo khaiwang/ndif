@@ -16,12 +16,12 @@ from:
 Implementation note: ``protect(obj)`` creates a dynamic subclass of both
 ProtectedObject and ``obj.__class__``.  This way ``isinstance(wrapped, Module)``
 still returns True, keeping downstream code (nnsight, accelerate, etc.) happy.
-The synthesized class is memoized per base type so warmup pays
-O(unique_module_types) class creations rather than O(modules).
 """
 
 from __future__ import annotations
 
+import threading
+from collections import defaultdict
 from copy import deepcopy
 from typing import Any
 
@@ -30,11 +30,18 @@ import torch
 # Maps ``id(wrapper)`` → original unwrapped object.
 PROTECTIONS: dict[int, Any] = {}
 
-# Per-type cache of dynamically synthesized ``_ProtectedObject`` subclasses.
-# Without this, every call to ``protect()`` creates a fresh class, which on
-# a transformer with ~10 unique module types and ~500 module instances
-# costs O(instances) class syntheses at warmup. With it, O(types).
-_PROTECTED_CLASS_CACHE: dict[type, type] = {}
+# Tracks attribute writes so they can be rolled back when exclusive mode is
+# active. Maps ``id(wrapper)`` → { attr_name: original_value }. Dormant by
+# default (writes are refused unless ``_exclusive_mode`` is set). See
+# ``docs/TODO_batched_attr_writes.md`` for the quiesce-then-exclusive design
+# this supports.
+SET_ATTRS: defaultdict[int, dict[str, Any]] = defaultdict(dict)
+
+# When set, ``__setattr__`` allows writes and records them for rollback via
+# ``clear_set_attrs()``. The actor-side coordinator in
+# ``BaseModelDeployment.execute_batched`` is responsible for only entering
+# exclusive mode after draining the in-flight batch — see the TODO doc.
+_exclusive_mode = threading.Event()
 
 # Methods that move the model between devices or change its dtype.
 # Blocked because the model is shared across requests and pinned to
@@ -85,21 +92,9 @@ class ProtectedObject:
 
     def __getattribute__(self, name: str):
         if name in _BLOCKED_METHODS:
-            raise ValueError(
-                f"Method `{name}` cannot be called on a protected object"
-            )
+            raise ValueError(f"Method `{name}` cannot be called on a protected object")
 
         obj = PROTECTIONS[id(self)]
-
-        # Dunder access is Python-internal (pickle, copy, isinstance, repr).
-        # User-level protection only needs the non-dunder surface; routing
-        # dunders through the deepcopy branch would deepcopy
-        # ``module.__dict__`` (containing ``_parameters`` with weight tensors)
-        # every time pickle introspects the object — catastrophic at 32B+
-        # model sizes.
-        if name.startswith("__") and name.endswith("__"):
-            return getattr(obj, name)
-
         value = getattr(obj, name)
 
         # Return deep copies of mutable types so users can't silently mutate
@@ -119,22 +114,30 @@ class ProtectedObject:
         raise AttributeError(f"Attribute `{name}` cannot be accessed")
 
     def __setattr__(self, name: str, value: Any):
-        # Writes to a protected module are refused outright after __init__.
+        # Writes to a protected module are refused by default, and tracked
+        # for rollback only when the actor has entered exclusive mode
+        # (single in-flight request, batch drained).
         #
-        # Upstream dev uses a mutate-then-rollback pattern (SET_ATTRS +
-        # clear_set_attrs()) that is safe only when requests are
-        # serialized on the actor. Under our batched execution path
-        # (VanillaBatchServer fusing N concurrent users into one forward)
-        # mutating the real shared module would corrupt co-batched peers
-        # before rollback can land.
+        # Upstream dev unconditionally uses the mutate-then-rollback path
+        # (SET_ATTRS + clear_set_attrs()). That is safe when requests are
+        # serialized on the actor but corrupts co-batched peers under our
+        # VanillaBatchServer path: the real shared module is mutated
+        # synchronously, the fused forward already reads the bad state,
+        # and rollback only lands at end-of-request — too late.
         #
-        # See docs/TODO_batched_attr_writes.md for the detailed analysis
-        # and the design sketch for a future "quiesce then exclusive"
-        # escape hatch that would allow writes without sacrificing
-        # batching isolation.
+        # The gate here keeps the machinery wired up so that when the
+        # quiesce-then-exclusive coordinator ships (see
+        # docs/TODO_batched_attr_writes.md), enabling writes is just a
+        # matter of setting ``_exclusive_mode`` after the drain completes.
         if not protected(self):
             # Still inside __init__ — allow normal attribute setting.
             object.__setattr__(self, name, value)
+        elif _exclusive_mode.is_set():
+            # Exclusive mode: actor has drained other in-flight requests
+            # and is running this one alone. Safe to mutate the real
+            # module; record for rollback.
+            SET_ATTRS[id(self)][name] = getattr(PROTECTIONS[id(self)], name)
+            PROTECTIONS[id(self)].__dict__[name] = value
         else:
             raise AttributeError(
                 f"Attribute '{name}' cannot be set after initialization"
@@ -142,15 +145,31 @@ class ProtectedObject:
 
 
 def protect(obj: Any):
-    """Wrap *obj* in a ProtectedObject that also inherits from obj's class.
+    """Wrap *obj* in a ProtectedObject that also inherits from obj's class."""
 
-    The synthesized subclass is memoized on ``type(obj)`` so a warmup
-    sweep over every persistent module pays O(unique_types) class
-    syntheses instead of O(instances).
+    class _ProtectedObject(ProtectedObject, obj.__class__):
+        pass
+
+    return _ProtectedObject(obj)
+
+
+def clear_set_attrs():
+    """Revert attribute writes recorded during exclusive mode.
+
+    Only meaningful after writes were permitted via ``_exclusive_mode``;
+    in the default (refuse-write) posture this is a no-op because
+    ``SET_ATTRS`` stays empty. The actor-side coordinator is responsible
+    for calling this in a ``finally`` block around any exclusive-mode
+    run so a dying request can't leak mutations into the next. See
+    ``docs/TODO_batched_attr_writes.md``.
     """
-    base = type(obj)
-    cls = _PROTECTED_CLASS_CACHE.get(base)
-    if cls is None:
-        cls = type("_ProtectedObject", (ProtectedObject, base), {})
-        _PROTECTED_CLASS_CACHE[base] = cls
-    return cls(obj)
+    for wrapper_id, writes in list(SET_ATTRS.items()):
+        if not writes:
+            continue
+        real = PROTECTIONS.get(wrapper_id)
+        if real is None:
+            writes.clear()
+            continue
+        for name, original in writes.items():
+            real.__dict__[name] = original
+        writes.clear()

@@ -81,7 +81,7 @@ Separate from the sandbox, the **ProtectedObject** wrapper protects loaded model
 
 - **Device movement blocked**: `.to()`, `.cuda()`, `.cpu()`, `.half()`, `.float()`, `.bfloat16()`, `.double()`, `.to_empty()` — prevents users from moving models off their assigned GPUs.
 - **Tensor deepcopy**: Reads of Tensor, list, and dict attributes return deep copies so users can't silently mutate model internals.
-- **Write tracking**: Attribute writes are recorded and reverted by `clear_set_attrs()` after each request so modifications don't leak between users.
+- **Writes refused by default**: Attribute writes to a protected module raise `AttributeError` after `__init__` unless the actor has entered `_exclusive_mode` (batch drained, single in-flight request). Upstream's unconditional mutate-then-rollback (`SET_ATTRS` / `clear_set_attrs`) is unsafe under batching — mutating the real shared module would corrupt co-batched peers before rollback could land. The machinery is kept in tree but dormant, awaiting the quiesce-then-exclusive coordinator. See `docs/TODO_batched_attr_writes.md`.
 
 ## File Structure
 
@@ -131,7 +131,8 @@ importer.py   guards.py
                                    │    tracer.execute(model)        │
                                    │                                 │
                                    │ 3. CLEANUP                      │
-                                   │    clear_set_attrs()            │
+                                   │    (no attr rollback —          │
+                                   │     writes are refused)         │
                                    └─────────────────────────────────┘
 ```
 
