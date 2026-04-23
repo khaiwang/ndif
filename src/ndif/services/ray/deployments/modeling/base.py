@@ -703,7 +703,7 @@ class BaseModelDeployment:
 
             span.add_event("clearing_globals")
             Globals.clear()
-clear_set_attrs()
+            clear_set_attrs()
             self.model.interleaver.cancel()
 
             self._request_count += 1
